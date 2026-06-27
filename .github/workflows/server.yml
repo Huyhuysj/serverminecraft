@@ -60,21 +60,26 @@ jobs:
           echo "📥 Pulling server data from $REMOTE"
           rclone sync "$REMOTE" ${{ env.SERVER_DIR }} -P --drive-acknowledge-abuse
 
-      - name: Start Minecraft server
+      - name: Start Minecraft server in screen
         run: |
           cd ${{ env.SERVER_DIR }}
+          # Kill any existing screen session
+          screen -S mc -X quit 2>/dev/null || true
           screen -dmS mc
           CMD="java -Xmx${{ steps.config.outputs.RAM }} ${{ steps.config.outputs.CUSTOM_OPTS }} -jar ${{ steps.config.outputs.JAR_NAME }} nogui"
           echo "🚀 Starting server with command: $CMD"
           screen -S mc -X stuff "$CMD\n"
-          echo $! > ../server.pid
+          sleep 5
           echo "✅ Server started in screen session 'mc'"
+          # Save PID file for later kill
+          echo $! > ../server.pid
+          screen -ls
 
       - name: Show initial log
         run: |
           sleep 3
-          echo "📋 Initial log (first 20 lines):"
-          tail -20 ${{ env.SERVER_DIR }}/logs/latest.log || echo "Log file not yet created"
+          echo "📋 Initial log (first 30 lines):"
+          tail -30 ${{ env.SERVER_DIR }}/logs/latest.log || echo "Log file not yet created"
 
       - name: Periodic sync to Drive
         run: |
@@ -84,15 +89,16 @@ jobs:
             sleep 600
             echo "$(date) 🔄 Syncing..."
             cd ${{ env.SERVER_DIR }}
+            # Check if screen session exists
             if screen -list | grep -q "\.mc"; then
               screen -S mc -X stuff "save-all\n"
-              echo "$(date) 💾 save-all sent"
+              echo "$(date) 💾 save-all sent to screen"
             else
-              echo "$(date) ⚠️ screen session not found, skip save-all"
+              echo "$(date) ⚠️ Screen session 'mc' not found! Server may have crashed."
             fi
             cd ..
             REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
-            rclone sync ${{ env.SERVER_DIR }} "$REMOTE" -P --drive-acknowledge-abuse
+            rclone sync ${{ env.SERVER_DIR }} "$REMOTE" -P --drive-acknowledge-abuse || echo "$(date) ⚠️ Sync failed"
             echo "$(date) ✅ Sync completed"
           done &
           wait
@@ -105,6 +111,7 @@ jobs:
             kill $(cat server.pid) 2>/dev/null || true
             echo "🛑 Server stopped"
           fi
+          screen -S mc -X quit 2>/dev/null || true
           REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
           rclone sync ${{ env.SERVER_DIR }} "$REMOTE" -P --drive-acknowledge-abuse
           echo "✅ Final sync done"
