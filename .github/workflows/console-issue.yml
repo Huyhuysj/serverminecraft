@@ -42,7 +42,7 @@ jobs:
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
-      - name: Setup rclone (heredoc)
+      - name: Setup rclone
         run: |
           mkdir -p ~/.config/rclone
           cat << 'EOF' > ~/.config/rclone/rclone.conf
@@ -51,14 +51,13 @@ jobs:
 
       - name: Pull server data from Drive
         run: |
-          source server-config.env
           rclone sync "driver:$DRIVE_FOLDER" ./server -P
 
       - name: Send command to server
         id: send
         run: |
           COMMAND="${{ github.event.issue.title }}"
-          echo "$COMMAND" > ./server/command.txt
+          echo "📨 Sending command: $COMMAND"
           cd server
           screen -dmS mc
           screen -S mc -X stuff "java -Xmx15G -jar server.jar nogui\n"
@@ -67,7 +66,7 @@ jobs:
           sleep 2
           tail -20 logs/latest.log > ../log.txt || echo "No log yet" > ../log.txt
 
-      - name: Comment result back to issue
+      - name: Comment result
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
