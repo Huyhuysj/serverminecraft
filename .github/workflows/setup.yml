@@ -39,12 +39,19 @@ jobs:
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
+      - name: Debug secret (check first 5 lines)
+        env:
+          RCLONE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
+        run: |
+          echo "$RCLONE_TOKEN" | head -n 5
+
       - name: Setup rclone
         env:
           RCLONE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
           echo "$RCLONE_TOKEN" > ~/.config/rclone/rclone.conf
+          cat ~/.config/rclone/rclone.conf | head -n 5
 
       - name: Create server directory and download jar
         run: |
