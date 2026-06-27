@@ -42,4 +42,4 @@ jobs:
 
       - name: Sync to Google Drive
         run: |
-          rclone sync server "drive:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+          rclone sync server "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
