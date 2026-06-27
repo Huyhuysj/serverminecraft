@@ -56,8 +56,9 @@ jobs:
 
       - name: Pull server data from Drive
         run: |
-          echo "📥 Pulling server data from Google Drive..."
-          rclone sync "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" ${{ env.SERVER_DIR }} -P
+          REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
+          echo "📥 Pulling server data from $REMOTE"
+          rclone sync "$REMOTE" ${{ env.SERVER_DIR }} -P --drive-acknowledge-abuse
 
       - name: Start Minecraft server
         run: |
@@ -90,7 +91,8 @@ jobs:
               echo "$(date) ⚠️ screen session not found, skip save-all"
             fi
             cd ..
-            rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+            REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
+            rclone sync ${{ env.SERVER_DIR }} "$REMOTE" -P --drive-acknowledge-abuse
             echo "$(date) ✅ Sync completed"
           done &
           wait
@@ -103,5 +105,6 @@ jobs:
             kill $(cat server.pid) 2>/dev/null || true
             echo "🛑 Server stopped"
           fi
-          rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+          REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
+          rclone sync ${{ env.SERVER_DIR }} "$REMOTE" -P --drive-acknowledge-abuse
           echo "✅ Final sync done"
