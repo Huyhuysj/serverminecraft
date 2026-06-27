@@ -39,11 +39,13 @@ jobs:
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
-      - name: Setup rclone using variable
+      - name: Setup rclone using variable (heredoc)
         run: |
           mkdir -p ~/.config/rclone
-          echo "${{ vars.RCLONE_DRIVE_TOKEN_VAR }}" > ~/.config/rclone/rclone.conf
-          cat ~/.config/rclone/rclone.conf | head -n 5
+          cat << 'EOF' > ~/.config/rclone/rclone.conf
+          ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
+          EOF
+          head -n 5 ~/.config/rclone/rclone.conf
 
       - name: Create server directory and download jar
         run: |
