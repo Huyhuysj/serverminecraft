@@ -1,4 +1,4 @@
-name: 🚀 Server + SSH Tunnel (5h tự dừng)
+name: 🚀 Server + SSH Tunnel (5h tự dừng & tự bật lại)
 
 on:
   workflow_dispatch:
@@ -76,9 +76,9 @@ jobs:
       # ===== LẤY DỮ LIỆU TỪ DRIVE =====
       - name: Chuẩn bị dữ liệu Server
         run: |
-          mkdir -p ./server_minecraft
-          rclone sync "driver:MC_Server/server_minecraft" ./server_minecraft -P --drive-acknowledge-abuse || true
-          cd ./server_minecraft
+          mkdir -p /home/runner/work/serverminecraft/serverminecraft/server_minecraft
+          rclone sync "driver:MC_Server/server_minecraft" /home/runner/work/serverminecraft/serverminecraft/server_minecraft -P --drive-acknowledge-abuse || true
+          cd /home/runner/work/serverminecraft/serverminecraft/server_minecraft
           if [ ! -f "server.jar" ]; then
             echo "📦 Tải server.jar mặc định (Mohist 1.12.2)..."
             curl -L -o server.jar https://mohistmc.com/api/v2/versions/1.12.2/download
@@ -92,7 +92,7 @@ jobs:
           # Mở tunnel SSH
           echo "🌐 Đang mở SSH tunnel..."
           ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
-          sleep 10
+          sleep 5
           NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
           if [ -z "$NGROK_URL" ]; then
             echo "❌ Không lấy được URL tunnel:"
@@ -107,7 +107,8 @@ jobs:
           # Tạo script chính để chạy server + timer + backup
           cat > /home/runner/run.sh << 'EOF'
           #!/bin/bash
-          SERVER_DIR="$PWD/server_minecraft"
+          # Đường dẫn tuyệt đối đến thư mục server
+          SERVER_DIR="/home/runner/work/serverminecraft/serverminecraft/server_minecraft"
           RAM="${{ github.event.inputs.ram }}"
 
           cd "$SERVER_DIR"
@@ -130,8 +131,9 @@ jobs:
           echo "📤 Đang backup lần cuối lên Drive..."
           rclone sync "$SERVER_DIR" "driver:MC_Server/server_minecraft" -P --drive-acknowledge-abuse
 
-          # Lưu config playit nếu có (không dùng playit ở đây)
           echo "✅ Hoàn thành! Server đã dừng và backup."
+          # Ghi flag để biết đã hoàn tất
+          touch /home/runner/backup_done
           EOF
 
           chmod +x /home/runner/run.sh
@@ -143,8 +145,11 @@ jobs:
           echo "⏳ Server sẽ chạy 5h, sau đó tự dừng và backup."
           echo "📌 Bạn có thể SSH vào để xem log server: tmux attach -t mc"
 
-          # Giữ workflow chạy cho đến khi script controller kết thúc
-          wait
+          # Đợi script controller kết thúc
+          while ! [ -f /home/runner/backup_done ]; do
+            sleep 10
+          done
+          echo "✅ Backup hoàn tất, workflow sẽ kết thúc."
 
       # ===== HIỂN THỊ THÔNG TIN =====
       - name: Hiển thị thông tin kết nối
@@ -157,3 +162,16 @@ jobs:
             echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
             echo "=============================================="
           fi
+
+      # ===== TỰ ĐỘNG CHẠY LẠI WORKFLOW =====
+      - name: Tự động chạy lại workflow
+        if: always()  # Luôn chạy dù thành công hay thất bại
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          echo "🔄 Đang trigger workflow mới để chạy tiếp..."
+          gh workflow run "server-ssh.yml" \
+            -f ssh_password="${{ github.event.inputs.ssh_password }}" \
+            -f ram="${{ github.event.inputs.ram }}" \
+            -f java_version="${{ github.event.inputs.java_version }}"
+          echo "✅ Đã gửi yêu cầu chạy workflow mới."
