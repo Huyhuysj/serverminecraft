@@ -14,6 +14,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read config
+        id: config
+        run: |
+          source server-config.env
+          echo "JAVA_VERSION=$JAVA_VERSION" >> $GITHUB_OUTPUT
+          echo "DRIVE_FOLDER=$DRIVE_FOLDER" >> $GITHUB_OUTPUT
+
+      - name: Install Java
+        run: |
+          sudo apt update
+          JAVA_VER=${{ steps.config.outputs.JAVA_VERSION }}
+          if [ "$JAVA_VER" = "8" ]; then
+            sudo apt install -y openjdk-8-jdk
+          elif [ "$JAVA_VER" = "11" ]; then
+            sudo apt install -y openjdk-11-jdk
+          elif [ "$JAVA_VER" = "17" ]; then
+            sudo apt install -y openjdk-17-jdk
+          elif [ "$JAVA_VER" = "21" ]; then
+            sudo apt install -y openjdk-21-jdk
+          else
+            sudo apt install -y openjdk-21-jdk
+          fi
+
       - name: Install rclone
         run: |
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
