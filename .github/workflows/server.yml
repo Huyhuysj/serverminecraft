@@ -15,10 +15,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Read config
+        id: config
+        run: |
+          source server-config.env
+          echo "RAM=$RAM" >> $GITHUB_OUTPUT
+          echo "JAR_NAME=$JAR_FILENAME" >> $GITHUB_OUTPUT
+          echo "DRIVE_FOLDER=$DRIVE_FOLDER" >> $GITHUB_OUTPUT
+          echo "CUSTOM_OPTS=$CUSTOM_JAVA_OPTS" >> $GITHUB_OUTPUT
+          echo "JAVA_VERSION=$JAVA_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Install Java
         run: |
           sudo apt update
-          sudo apt install -y openjdk-21-jdk screen curl unzip jq
+          JAVA_VER=${{ steps.config.outputs.JAVA_VERSION }}
+          if [ "$JAVA_VER" = "8" ]; then
+            sudo apt install -y openjdk-8-jdk
+          elif [ "$JAVA_VER" = "11" ]; then
+            sudo apt install -y openjdk-11-jdk
+          elif [ "$JAVA_VER" = "17" ]; then
+            sudo apt install -y openjdk-17-jdk
+          elif [ "$JAVA_VER" = "21" ]; then
+            sudo apt install -y openjdk-21-jdk
+          else
+            sudo apt install -y openjdk-21-jdk
+          fi
+
+      - name: Install rclone, screen, etc
+        run: |
+          sudo apt install -y screen curl unzip jq
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
@@ -28,15 +53,6 @@ jobs:
         run: |
           mkdir -p ~/.config/rclone
           echo "$RCLONE_TOKEN" > ~/.config/rclone/rclone.conf
-
-      - name: Read config
-        id: config
-        run: |
-          source server-config.env
-          echo "RAM=$RAM" >> $GITHUB_OUTPUT
-          echo "JAR_NAME=$JAR_FILENAME" >> $GITHUB_OUTPUT
-          echo "DRIVE_FOLDER=$DRIVE_FOLDER" >> $GITHUB_OUTPUT
-          echo "CUSTOM_OPTS=$CUSTOM_JAVA_OPTS" >> $GITHUB_OUTPUT
 
       - name: Pull server data from Drive
         run: |
