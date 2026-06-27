@@ -49,7 +49,7 @@ jobs:
           ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
           EOF
 
-      - name: Pull server data from Drive (chỉ lấy thư mục MC_Server)
+      - name: Pull server data from Drive (only MC_Server folder)
         run: |
           REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
           echo "🔍 Syncing from $REMOTE to ./server"
@@ -60,12 +60,21 @@ jobs:
           COMMAND="${{ github.event.issue.title }}"
           echo "📨 Sending command: $COMMAND"
           cd server
-          screen -dmS mc
-          screen -S mc -X stuff "java -Xmx15G -jar server.jar nogui\n"
+          # Check if screen session exists
+          if screen -list | grep -q "\.mc"; then
+            screen -S mc -X stuff "$COMMAND\n"
+            echo "✅ Command sent to existing screen session"
+          else
+            # If no screen, start server (fallback)
+            echo "⚠️ Screen session not found. Starting server..."
+            screen -dmS mc
+            screen -S mc -X stuff "java -Xmx15G -jar server.jar nogui\n"
+            sleep 3
+            screen -S mc -X stuff "$COMMAND\n"
+            echo "✅ Command sent after starting server"
+          fi
           sleep 2
-          screen -S mc -X stuff "$COMMAND\n"
-          sleep 1
-          tail -20 logs/latest.log > ../log.txt || echo "No log yet" > ../log.txt
+          tail -30 logs/latest.log > ../log.txt || echo "No log yet" > ../log.txt
 
       - name: Comment result
         env:
