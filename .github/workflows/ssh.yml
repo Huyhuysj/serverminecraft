@@ -1,100 +1,47 @@
-name: SSH Tunnel (ngrok)
+name: SSH Tunnel (Cloudflare Quick Tunnel)
 
 on:
   workflow_dispatch:
     inputs:
-      action:
-        description: 'Chọn hành động'
-        required: true
-        default: 'start'
-        type: choice
-        options:
-          - start
-          - stop
       ssh_password:
-        description: 'Mật khẩu SSH (để trống nếu dùng mặc định)'
-        required: false
-        default: ''
+        description: 'Mật khẩu SSH'
+        required: true
+        default: 'mySecurePassword123'
 
 jobs:
   tunnel:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Read config
-        id: config
+      - name: Install cloudflared
         run: |
-          source server-config.env
-          echo "DRIVE_FOLDER=$DRIVE_FOLDER" >> $GITHUB_OUTPUT
+          curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
 
-      - name: Install rclone and ngrok
+      - name: Start SSH Server và Cloudflare Tunnel
         run: |
-          sudo apt update
-          sudo apt install -y openssh-server curl
-          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
-          sudo dpkg -i rclone-current-linux-amd64.deb
-          # Install ngrok
-          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt update
-          sudo apt install -y ngrok
+          # 1. Cài SSH server
+          sudo apt update && sudo apt install -y openssh-server
 
-      - name: Setup rclone
-        run: |
-          mkdir -p ~/.config/rclone
-          cat << 'EOF' > ~/.config/rclone/rclone.conf
-          ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
-          EOF
+          # 2. Tạo user và set password
+          sudo useradd -m -s /bin/bash runner
+          echo "runner:${{ github.event.inputs.ssh_password }}" | sudo chpasswd
 
-      - name: Setup ngrok
-        run: |
-          ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
-
-      - name: Start SSH tunnel
-        if: github.event.inputs.action == 'start'
-        run: |
-          # Set SSH password
-          SSH_PASS="${{ github.event.inputs.ssh_password }}"
-          if [ -z "$SSH_PASS" ]; then
-            SSH_PASS="$(openssl rand -base64 12)"
-            echo "🔑 SSH password: $SSH_PASS"
-          fi
-          echo "root:$SSH_PASS" | sudo chpasswd
-          
-          # Allow root login with password
+          # 3. Cho phép đăng nhập bằng password
           sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
-          
-          # Start ngrok tunnel
-          echo "🌐 Starting ngrok tunnel on port 22..."
-          ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
-          sleep 5
-          
-          # Extract public URL
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
-          echo "✅ SSH tunnel ready!"
-          echo "🔗 Connect via: ssh root@$NGROK_URL"
-          echo "🔑 Password: $SSH_PASS"
-          
-          # Save to file for later
-          echo "$NGROK_URL" > /tmp/ngrok_url.txt
-          echo "$SSH_PASS" > /tmp/ssh_pass.txt
-          
-          # Keep tunnel alive
-          while true; do sleep 60; done
 
-      - name: Stop SSH tunnel
-        if: github.event.inputs.action == 'stop'
-        run: |
-          killall ngrok 2>/dev/null || true
-          echo "🛑 SSH tunnel stopped"
+          # 4. Tạo Cloudflare Tunnel
+          echo "🔄 Đang tạo Cloudflare Tunnel..."
+          cloudflared tunnel --url localhost:22 &
 
-      - name: Show connection info (always)
-        if: github.event.inputs.action == 'start'
-        run: |
-          echo "📋 Connection info:"
-          cat /tmp/ngrok_url.txt 2>/dev/null || echo "Not available"
-          echo "Password: $(cat /tmp/ssh_pass.txt 2>/dev/null || echo 'Not available')"
+          # 5. Đợi tunnel khởi tạo và lấy URL
+          sleep 10
+          echo "✅ SSH Tunnel đã sẵn sàng!"
+          echo "🔍 Hãy tìm dòng có dạng: https://xxxxx.trycloudflare.com"
+          echo "🔑 Username: runner"
+          echo "🔑 Password: ${{ github.event.inputs.ssh_password }}"
+
+          # 6. Giữ workflow chạy
+          wait
