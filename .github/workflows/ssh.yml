@@ -20,28 +20,32 @@ jobs:
 
       - name: Start SSH Server và Cloudflare Tunnel
         run: |
-          # 1. Cài SSH server
+          # 1. Cài SSH server (nếu chưa có)
           sudo apt update && sudo apt install -y openssh-server
 
-          # 2. Tạo user và set password
-          sudo useradd -m -s /bin/bash runner
+          # 2. Đặt mật khẩu cho user runner (đã tồn tại)
           echo "runner:${{ github.event.inputs.ssh_password }}" | sudo chpasswd
 
-          # 3. Cho phép đăng nhập bằng password
-          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          # 3. Đảm bảo user runner có shell và thư mục home
+          sudo usermod -s /bin/bash runner
+          sudo mkdir -p /home/runner
+          sudo chown runner:runner /home/runner
+
+          # 4. Cho phép đăng nhập bằng mật khẩu
+          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
 
-          # 4. Tạo Cloudflare Tunnel
+          # 5. Tạo Cloudflare Tunnel
           echo "🔄 Đang tạo Cloudflare Tunnel..."
           cloudflared tunnel --url localhost:22 &
 
-          # 5. Đợi tunnel khởi tạo và lấy URL
+          # 6. Đợi tunnel khởi tạo và lấy URL
           sleep 10
           echo "✅ SSH Tunnel đã sẵn sàng!"
           echo "🔍 Hãy tìm dòng có dạng: https://xxxxx.trycloudflare.com"
           echo "🔑 Username: runner"
           echo "🔑 Password: ${{ github.event.inputs.ssh_password }}"
 
-          # 6. Giữ workflow chạy
+          # 7. Giữ workflow chạy
           wait
