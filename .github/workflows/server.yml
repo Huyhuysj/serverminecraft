@@ -47,7 +47,7 @@ jobs:
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
-      - name: Setup rclone (heredoc)
+      - name: Setup rclone
         run: |
           mkdir -p ~/.config/rclone
           cat << 'EOF' > ~/.config/rclone/rclone.conf
@@ -56,6 +56,7 @@ jobs:
 
       - name: Pull server data from Drive
         run: |
+          echo "📥 Pulling server data from Google Drive..."
           rclone sync "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" ${{ env.SERVER_DIR }} -P
 
       - name: Start Minecraft server
@@ -63,22 +64,44 @@ jobs:
           cd ${{ env.SERVER_DIR }}
           screen -dmS mc
           CMD="java -Xmx${{ steps.config.outputs.RAM }} ${{ steps.config.outputs.CUSTOM_OPTS }} -jar ${{ steps.config.outputs.JAR_NAME }} nogui"
+          echo "🚀 Starting server with command: $CMD"
           screen -S mc -X stuff "$CMD\n"
           echo $! > ../server.pid
+          echo "✅ Server started in screen session 'mc'"
+
+      - name: Show initial log
+        run: |
+          sleep 3
+          echo "📋 Initial log (first 20 lines):"
+          tail -20 ${{ env.SERVER_DIR }}/logs/latest.log || echo "Log file not yet created"
 
       - name: Periodic sync to Drive
         run: |
+          echo "🔄 Periodic sync every 10 minutes started."
           while true; do
+            echo "$(date) ⏳ Waiting 10 minutes..."
             sleep 600
+            echo "$(date) 🔄 Syncing..."
             cd ${{ env.SERVER_DIR }}
-            screen -S mc -X stuff "save-all\n"
+            if screen -list | grep -q "\.mc"; then
+              screen -S mc -X stuff "save-all\n"
+              echo "$(date) 💾 save-all sent"
+            else
+              echo "$(date) ⚠️ screen session not found, skip save-all"
+            fi
             cd ..
             rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+            echo "$(date) ✅ Sync completed"
           done &
           wait
 
       - name: Final sync and cleanup
         if: always()
         run: |
-          if [ -f server.pid ]; then kill $(cat server.pid) 2>/dev/null || true; fi
+          echo "🧹 Final sync before exit..."
+          if [ -f server.pid ]; then
+            kill $(cat server.pid) 2>/dev/null || true
+            echo "🛑 Server stopped"
+          fi
           rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+          echo "✅ Final sync done"
