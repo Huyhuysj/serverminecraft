@@ -48,11 +48,9 @@ jobs:
           sudo dpkg -i rclone-current-linux-amd64.deb
 
       - name: Setup rclone
-        env:
-          RCLONE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
-          echo "$RCLONE_TOKEN" > ~/.config/rclone/rclone.conf
+          echo "${{ vars.RCLONE_DRIVE_TOKEN_VAR }}" > ~/.config/rclone/rclone.conf
 
       - name: Pull server data from Drive
         run: |
