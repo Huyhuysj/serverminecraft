@@ -40,6 +40,6 @@ jobs:
           echo "server-port=25565" > server.properties
           mkdir -p mods plugins world
 
-      - name: Sync to Google Drive (full directory)
+      - name: Sync to Google Drive
         run: |
           rclone sync server "drive:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
