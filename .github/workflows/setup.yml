@@ -39,13 +39,12 @@ jobs:
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
-      - name: Setup rclone using variable (heredoc)
+      - name: Setup rclone
         run: |
           mkdir -p ~/.config/rclone
           cat << 'EOF' > ~/.config/rclone/rclone.conf
           ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
           EOF
-          head -n 5 ~/.config/rclone/rclone.conf
 
       - name: Create server directory and download jar
         run: |
@@ -58,4 +57,5 @@ jobs:
 
       - name: Sync to Google Drive
         run: |
-          rclone sync server "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+          REMOTE="driver:${{ steps.config.outputs.DRIVE_FOLDER }}"
+          rclone sync server "$REMOTE" -P --drive-acknowledge-abuse
