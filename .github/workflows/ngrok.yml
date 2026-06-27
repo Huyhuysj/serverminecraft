@@ -1,0 +1,65 @@
+name: SSH Tunnel (ngrok)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_password:
+        description: 'Mật khẩu SSH'
+        required: true
+        default: 'mySecurePassword123'
+
+jobs:
+  tunnel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Install ngrok
+        run: |
+          curl -O https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
+          unzip ngrok-stable-linux-amd64.zip
+          sudo mv ngrok /usr/local/bin/
+
+      - name: Start SSH Server và ngrok tunnel
+        run: |
+          # 1. Cài SSH server
+          sudo apt update && sudo apt install -y openssh-server
+
+          # 2. Đặt mật khẩu cho user runner
+          echo "runner:${{ github.event.inputs.ssh_password }}" | sudo chpasswd
+          sudo usermod -s /bin/bash runner
+          sudo mkdir -p /home/runner
+          sudo chown runner:runner /home/runner
+
+          # 3. Cho phép đăng nhập bằng mật khẩu
+          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+          sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+          # 4. Cấu hình ngrok với authtoken
+          ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
+
+          # 5. Chạy ngrok tunnel tới cổng 22
+          echo "🔄 Đang tạo ngrok tunnel..."
+          ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+          sleep 5
+
+          # 6. Lấy địa chỉ tunnel
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
+          if [ -z "$NGROK_URL" ]; then
+            echo "❌ Không thể lấy URL tunnel. Kiểm tra log:"
+            cat ngrok.log
+            exit 1
+          fi
+
+          echo "✅ SSH Tunnel ready!"
+          echo "🔗 Kết nối: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
+          echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+          echo ""
+          echo "📌 Trên Termius:"
+          echo "   Hostname: ${NGROK_URL%:*}"
+          echo "   Port: ${NGROK_URL##*:}"
+          echo "   Username: runner"
+          echo "   Password: ..."
+
+          # 7. Giữ workflow chạy
+          wait
