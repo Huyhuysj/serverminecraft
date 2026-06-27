@@ -1,0 +1,45 @@
+name: Setup Server (First time)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rclone and Java
+        run: |
+          sudo apt update
+          sudo apt install -y openjdk-21-jdk curl
+          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
+          sudo dpkg -i rclone-current-linux-amd64.deb
+
+      - name: Setup rclone config
+        env:
+          RCLONE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_TOKEN" > ~/.config/rclone/rclone.conf
+
+      - name: Read config
+        id: config
+        run: |
+          source server-config.env
+          echo "JAR_URL=$SERVER_JAR_URL" >> $GITHUB_OUTPUT
+          echo "JAR_NAME=$JAR_FILENAME" >> $GITHUB_OUTPUT
+          echo "DRIVE_FOLDER=$DRIVE_FOLDER" >> $GITHUB_OUTPUT
+
+      - name: Create server directory and download jar
+        run: |
+          mkdir -p server
+          cd server
+          curl -L -o ${{ steps.config.outputs.JAR_NAME }} ${{ steps.config.outputs.JAR_URL }}
+          echo "eula=true" > eula.txt
+          echo "server-port=25565" > server.properties
+          mkdir -p mods plugins world
+
+      - name: Sync to Google Drive (full directory)
+        run: |
+          rclone sync server "drive:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
