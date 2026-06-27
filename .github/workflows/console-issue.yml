@@ -1,0 +1,54 @@
+name: Console via Issue
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  process:
+    if: github.repository == 'Huyhuysj/serverminecraft' && contains(github.event.issue.labels.*.name, 'console')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rclone
+        run: |
+          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
+          sudo dpkg -i rclone-current-linux-amd64.deb
+
+      - name: Setup rclone
+        env:
+          RCLONE_TOKEN: ${{ secrets.RCLONE_DRIVE_TOKEN }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_TOKEN" > ~/.config/rclone/rclone.conf
+
+      - name: Pull server data from Drive
+        run: |
+          source server-config.env
+          rclone sync "drive:$DRIVE_FOLDER" ./server -P
+
+      - name: Send command to server
+        id: send
+        run: |
+          COMMAND="${{ github.event.issue.title }}"
+          # Ghi lệnh vào file để server screen đọc
+          echo "$COMMAND" > ./server/command.txt
+          # Chạy server trong screen và gửi lệnh
+          cd server
+          screen -dmS mc
+          screen -S mc -X stuff "java -Xmx15G -jar server.jar nogui\n"
+          sleep 5
+          screen -S mc -X stuff "$COMMAND\n"
+          sleep 2
+          # Lấy 20 dòng log cuối
+          tail -20 logs/latest.log > ../log.txt
+
+      - name: Comment result back to issue
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} -F log.txt
