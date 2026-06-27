@@ -2,7 +2,7 @@ name: Minecraft Server
 
 on:
   schedule:
-    - cron: '0 */4 * * *'   # mỗi 4 giờ
+    - cron: '0 */4 * * *'
   workflow_dispatch:
 
 env:
@@ -15,14 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ---- Cài công cụ ----
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y openjdk-21-jdk screen curl unzip jq
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
-          pip install python-telegram-bot --upgrade
 
       - name: Setup rclone
         env:
@@ -40,12 +38,10 @@ jobs:
           echo "DRIVE_FOLDER=$DRIVE_FOLDER" >> $GITHUB_OUTPUT
           echo "CUSTOM_OPTS=$CUSTOM_JAVA_OPTS" >> $GITHUB_OUTPUT
 
-      # ---- Đồng bộ từ Drive về runner (chỉ tải thay đổi) ----
       - name: Pull server data from Drive
         run: |
           rclone sync "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" ${{ env.SERVER_DIR }} -P
 
-      # ---- Khởi động server trong screen ----
       - name: Start Minecraft server
         run: |
           cd ${{ env.SERVER_DIR }}
@@ -54,11 +50,10 @@ jobs:
           screen -S mc -X stuff "$CMD\n"
           echo $! > ../server.pid
 
-      # ---- Vòng lặp đồng bộ định kỳ (mỗi 10 phút) ----
       - name: Periodic sync to Drive
         run: |
           while true; do
-            sleep 600   # 10 phút
+            sleep 600
             cd ${{ env.SERVER_DIR }}
             screen -S mc -X stuff "save-all\n"
             cd ..
@@ -66,10 +61,8 @@ jobs:
           done &
           wait
 
-      # ---- Đồng bộ cuối cùng trước khi kết thúc ----
       - name: Final sync and cleanup
         if: always()
         run: |
           if [ -f server.pid ]; then kill $(cat server.pid) 2>/dev/null || true; fi
-          if [ -f bot.pid ]; then kill $(cat bot.pid) 2>/dev/null || true; fi
           rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
