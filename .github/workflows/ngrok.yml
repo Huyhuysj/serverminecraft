@@ -1,76 +1,159 @@
-name: SSH Tunnel (ngrok)
+name: 🚀 Server + SSH Tunnel (5h tự dừng)
 
 on:
   workflow_dispatch:
     inputs:
       ssh_password:
-        description: 'Mật khẩu SSH'
+        description: '🔑 Mật khẩu SSH'
         required: true
         default: 'mySecurePassword123'
+      ram:
+        description: '💾 RAM (vd: 12G, 15G)'
+        required: true
+        default: '15G'
+      java_version:
+        description: '☕ Java (8, 11, 17, 21)'
+        required: true
+        default: '8'
 
 jobs:
-  tunnel:
+  server:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 360  # 6 tiếng (dư 1h để backup)
+
     steps:
-      - name: Install ngrok via APT
+      - uses: actions/checkout@v4
+
+      # ===== CÀI CÔNG CỤ =====
+      - name: Cài đặt công cụ
+        run: |
+          sudo apt update
+          sudo apt install -y tmux rclone screen curl unzip jq wget openssh-server
+
+      # ===== CÀI JAVA =====
+      - name: Cài đặt Java ${{ github.event.inputs.java_version }}
+        run: |
+          JAVA_VER=${{ github.event.inputs.java_version }}
+          case $JAVA_VER in
+            8)  sudo apt install -y openjdk-8-jdk ;;
+            11) sudo apt install -y openjdk-11-jdk ;;
+            17) sudo apt install -y openjdk-17-jdk ;;
+            21) sudo apt install -y openjdk-21-jdk ;;
+            *)  echo "❌ Java không hợp lệ"; exit 1 ;;
+          esac
+          java -version
+
+      # ===== RCLONE =====
+      - name: Cài đặt Rclone
+        run: |
+          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
+          sudo dpkg -i rclone-current-linux-amd64.deb
+          mkdir -p ~/.config/rclone
+          cat << 'EOF' > ~/.config/rclone/rclone.conf
+          ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
+          EOF
+
+      # ===== NGROK =====
+      - name: Cài đặt Ngrok
         run: |
           curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com bookworm main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt update
           sudo apt install -y ngrok
+          ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
 
-      - name: Start SSH Server và ngrok tunnel
+      # ===== SSH =====
+      - name: Cấu hình SSH
         run: |
-          # 1. Cài SSH server
-          sudo apt update && sudo apt install -y openssh-server
-
-          # 2. Đặt mật khẩu cho user runner
           echo "runner:${{ github.event.inputs.ssh_password }}" | sudo chpasswd
           sudo usermod -s /bin/bash runner
           sudo mkdir -p /home/runner
           sudo chown runner:runner /home/runner
-
-          # 3. Cho phép đăng nhập bằng mật khẩu
           sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
 
-          # 4. Cấu hình authtoken
-          ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
+      # ===== LẤY DỮ LIỆU TỪ DRIVE =====
+      - name: Chuẩn bị dữ liệu Server
+        run: |
+          mkdir -p ./server_minecraft
+          rclone sync "driver:MC_Server/server_minecraft" ./server_minecraft -P --drive-acknowledge-abuse || true
+          cd ./server_minecraft
+          if [ ! -f "server.jar" ]; then
+            echo "📦 Tải server.jar mặc định (Mohist 1.12.2)..."
+            curl -L -o server.jar https://mohistmc.com/api/v2/versions/1.12.2/download
+            echo "eula=true" > eula.txt
+            echo "server-port=25565" > server.properties
+          fi
 
-          # 5. Chạy ngrok tunnel (ghi log ra file và console)
-          echo "🔄 Đang tạo ngrok tunnel..."
+      # ===== CHẠY NGrok + SERVER + TIMER 5h =====
+      - name: Khởi động Ngrok, Server và Timer 5h
+        run: |
+          # Mở tunnel SSH
+          echo "🌐 Đang mở SSH tunnel..."
           ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
-          NGROK_PID=$!
-
-          # 6. Đợi tunnel khởi tạo (tối đa 20 giây)
-          echo "⏳ Đợi tunnel khởi tạo..."
-          for i in {1..10}; do
-            sleep 2
-            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null | sed 's/tcp:\/\///')
-            if [ -n "$NGROK_URL" ]; then
-              break
-            fi
-            echo "   Đã đợi $((i*2)) giây..."
-          done
-
-          # 7. Kiểm tra và in kết quả
+          sleep 10
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
           if [ -z "$NGROK_URL" ]; then
-            echo "❌ Không lấy được URL tunnel. In log ngrok:"
+            echo "❌ Không lấy được URL tunnel:"
             cat ngrok.log
             exit 1
           fi
-
           echo "✅ SSH Tunnel ready!"
           echo "🔗 Kết nối: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
           echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
-          echo ""
-          echo "📌 Trên Termius:"
-          echo "   Hostname: ${NGROK_URL%:*}"
-          echo "   Port: ${NGROK_URL##*:}"
-          echo "   Username: runner"
-          echo "   Password: ..."
+          echo "$NGROK_URL" > /home/runner/ngrok_url.txt
 
-          # 8. Giữ workflow chạy
-          wait $NGROK_PID
+          # Tạo script chính để chạy server + timer + backup
+          cat > /home/runner/run.sh << 'EOF'
+          #!/bin/bash
+          SERVER_DIR="$PWD/server_minecraft"
+          RAM="${{ github.event.inputs.ram }}"
+
+          cd "$SERVER_DIR"
+          tmux kill-session -t mc 2>/dev/null
+          tmux new-session -d -s mc
+          tmux send-keys -t mc "java -Xmx$RAM -jar server.jar nogui" Enter
+          echo "✅ Server đã khởi động trong tmux session 'mc'"
+
+          # Đếm 5 giờ (18000 giây)
+          sleep 18000
+
+          echo "⏰ Đã 5h, đang dừng server..."
+          tmux send-keys -t mc "stop" Enter
+
+          # Đợi 5 phút để server tắt hẳn
+          echo "⏳ Đợi 5 phút để server tắt hoàn toàn..."
+          sleep 300
+
+          # Backup lần cuối
+          echo "📤 Đang backup lần cuối lên Drive..."
+          rclone sync "$SERVER_DIR" "driver:MC_Server/server_minecraft" -P --drive-acknowledge-abuse
+
+          # Lưu config playit nếu có (không dùng playit ở đây)
+          echo "✅ Hoàn thành! Server đã dừng và backup."
+          EOF
+
+          chmod +x /home/runner/run.sh
+
+          # Chạy script trong tmux riêng (để nó chạy nền)
+          tmux new-session -d -s controller
+          tmux send-keys -t controller "cd /home/runner && ./run.sh" Enter
+
+          echo "⏳ Server sẽ chạy 5h, sau đó tự dừng và backup."
+          echo "📌 Bạn có thể SSH vào để xem log server: tmux attach -t mc"
+
+          # Giữ workflow chạy cho đến khi script controller kết thúc
+          wait
+
+      # ===== HIỂN THỊ THÔNG TIN =====
+      - name: Hiển thị thông tin kết nối
+        run: |
+          if [ -f /home/runner/ngrok_url.txt ]; then
+            NGROK_URL=$(cat /home/runner/ngrok_url.txt)
+            echo "=============================================="
+            echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
+            echo "🔗 SSH: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
+            echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+            echo "=============================================="
+          fi
