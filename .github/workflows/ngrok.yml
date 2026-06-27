@@ -13,14 +13,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      - name: Install ngrok (phiên bản mới nhất v3)
+      # 1. Cài ngrok bằng APT (cách đáng tin cậy nhất)
+      - name: Install ngrok via APT
         run: |
-          # Tải xuống ngrok v3 mới nhất
-          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz[reference:2][reference:3]
-          # Giải nén
-          tar xvzf ./ngrok-v3-stable-linux-amd64.tgz[reference:4]
-          # Di chuyển vào thư mục hệ thống
-          sudo mv ngrok /usr/local/bin
+          # Thêm key và repository của ngrok
+          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com bookworm main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          # Cập nhật và cài đặt
+          sudo apt update
+          sudo apt install -y ngrok
 
       - name: Start SSH Server và ngrok tunnel
         run: |
@@ -39,7 +40,7 @@ jobs:
           sudo systemctl restart ssh
 
           # 4. Cấu hình authtoken cho ngrok
-          ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}[reference:5]
+          ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
 
           # 5. Chạy ngrok tunnel tới cổng 22
           echo "🔄 Đang tạo ngrok tunnel..."
