@@ -35,17 +35,14 @@ jobs:
         id: send
         run: |
           COMMAND="${{ github.event.issue.title }}"
-          # Ghi lệnh vào file để server screen đọc
           echo "$COMMAND" > ./server/command.txt
-          # Chạy server trong screen và gửi lệnh
           cd server
           screen -dmS mc
           screen -S mc -X stuff "java -Xmx15G -jar server.jar nogui\n"
           sleep 5
           screen -S mc -X stuff "$COMMAND\n"
           sleep 2
-          # Lấy 20 dòng log cuối
-          tail -20 logs/latest.log > ../log.txt
+          tail -20 logs/latest.log > ../log.txt || echo "No log yet" > ../log.txt
 
       - name: Comment result back to issue
         env:
