@@ -74,17 +74,36 @@ jobs:
           sudo systemctl restart ssh
 
       # ===== LẤY DỮ LIỆU TỪ DRIVE =====
-      - name: Chuẩn bị dữ liệu Server
-        run: |
-          mkdir -p /home/runner/work/serverminecraft/serverminecraft/server_minecraft
-          rclone sync "driver:MC_Server/server_minecraft" /home/runner/work/serverminecraft/serverminecraft/server_minecraft -P --drive-acknowledge-abuse || true
-          cd /home/runner/work/serverminecraft/serverminecraft/server_minecraft
-          if [ ! -f "server.jar" ]; then
-            echo "📦 Tải server.jar mặc định (Mohist 1.12.2)..."
-            curl -L -o server.jar https://mohistmc.com/api/v2/versions/1.12.2/download
-            echo "eula=true" > eula.txt
-            echo "server-port=25565" > server.properties
-          fi
+- name: Chuẩn bị dữ liệu Server
+  run: |
+    SERVER_DIR="/home/runner/work/serverminecraft/serverminecraft/server_minecraft"
+    mkdir -p "$SERVER_DIR"
+    rclone sync "driver:MC_Server/server_minecraft" "$SERVER_DIR" -P --drive-acknowledge-abuse || true
+    cd "$SERVER_DIR"
+    
+    # Kiểm tra xem có server.jar chưa, nếu chưa hoặc bị hỏng thì cài mới
+    if [ ! -f "server.jar" ] || ! java -jar server.jar --version &>/dev/null; then
+      echo "📦 Tải và cài đặt Mohist 1.12.2..."
+      # Xóa file cũ
+      rm -f server.jar
+      # Tải installer
+      curl -L -o mohist-installer.jar https://mohistmc.com/api/v2/versions/1.12.2/download
+      # Chạy installer để tạo server.jar
+      java -jar mohist-installer.jar --installServer
+      # Xóa installer (không cần nữa)
+      rm -f mohist-installer.jar
+      # Tạo file eula nếu chưa có
+      echo "eula=true" > eula.txt
+      # Tạo server.properties nếu chưa có
+      if [ ! -f "server.properties" ]; then
+        echo "server-port=25565" > server.properties
+      fi
+    else
+      echo "✅ Server.jar đã tồn tại và hợp lệ."
+    fi
+
+    
+
 
       # ===== CHẠY NGrok + SERVER + TIMER 5h =====
       - name: Khởi động Ngrok, Server và Timer 5h
