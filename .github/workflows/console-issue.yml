@@ -42,10 +42,12 @@ jobs:
           curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
           sudo dpkg -i rclone-current-linux-amd64.deb
 
-      - name: Setup rclone
+      - name: Setup rclone (heredoc)
         run: |
           mkdir -p ~/.config/rclone
-          echo "${{ vars.RCLONE_DRIVE_TOKEN_VAR }}" > ~/.config/rclone/rclone.conf
+          cat << 'EOF' > ~/.config/rclone/rclone.conf
+          ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
+          EOF
 
       - name: Pull server data from Drive
         run: |
