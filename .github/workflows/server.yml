@@ -43,7 +43,7 @@ jobs:
       # ---- Đồng bộ từ Drive về runner (chỉ tải thay đổi) ----
       - name: Pull server data from Drive
         run: |
-          rclone sync "drive:${{ steps.config.outputs.DRIVE_FOLDER }}" ${{ env.SERVER_DIR }} -P
+          rclone sync "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" ${{ env.SERVER_DIR }} -P
 
       # ---- Khởi động server trong screen ----
       - name: Start Minecraft server
@@ -54,70 +54,6 @@ jobs:
           screen -S mc -X stuff "$CMD\n"
           echo $! > ../server.pid
 
-      # ---- Chạy Telegram bot ----
-      - name: Run Telegram bot
-        env:
-          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          ADMIN: ${{ secrets.ADMIN_USER_ID }}
-        run: |
-          cat > bot.py << 'EOF'
-          import asyncio, os, subprocess
-          from telegram import Update
-          from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
-          TOKEN = os.environ['TOKEN']
-          ADMIN_ID = int(os.environ['ADMIN'])
-
-          async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-              if update.effective_user.id != ADMIN_ID:
-                  await update.message.reply_text("Unauthorized")
-                  return
-              await update.message.reply_text("Bot ready! Send any command to server.")
-
-          async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-              if update.effective_user.id != ADMIN_ID:
-                  return
-              text = update.message.text
-              if text.startswith('/'):
-                  return
-              subprocess.run(["screen", "-S", "mc", "-X", "stuff", text + "\n"])
-              await update.message.reply_text(f"Sent: {text}")
-
-          async def cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-              if update.effective_user.id != ADMIN_ID:
-                  return
-              command = ' '.join(ctx.args)
-              if not command:
-                  await update.message.reply_text("Usage: /cmd <command>")
-                  return
-              subprocess.run(["screen", "-S", "mc", "-X", "stuff", command + "\n"])
-              await update.message.reply_text(f"Command sent: {command}")
-
-          async def log(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-              if update.effective_user.id != ADMIN_ID:
-                  return
-              try:
-                  with open("./server/logs/latest.log", "r") as f:
-                      lines = f.readlines()[-30:]
-                  out = ''.join(lines) if lines else "No log"
-                  await update.message.reply_text(out[:4000])
-              except Exception as e:
-                  await update.message.reply_text(f"Error: {e}")
-
-          def main():
-              app = Application.builder().token(TOKEN).build()
-              app.add_handler(CommandHandler("start", start))
-              app.add_handler(CommandHandler("cmd", cmd))
-              app.add_handler(CommandHandler("log", log))
-              app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-              app.run_polling()
-
-          if __name__ == "__main__":
-              main()
-          EOF
-          python bot.py &
-          echo $! > bot.pid
-
       # ---- Vòng lặp đồng bộ định kỳ (mỗi 10 phút) ----
       - name: Periodic sync to Drive
         run: |
@@ -126,7 +62,7 @@ jobs:
             cd ${{ env.SERVER_DIR }}
             screen -S mc -X stuff "save-all\n"
             cd ..
-            rclone sync ${{ env.SERVER_DIR }} "drive:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+            rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
           done &
           wait
 
@@ -136,4 +72,4 @@ jobs:
         run: |
           if [ -f server.pid ]; then kill $(cat server.pid) 2>/dev/null || true; fi
           if [ -f bot.pid ]; then kill $(cat bot.pid) 2>/dev/null || true; fi
-          rclone sync ${{ env.SERVER_DIR }} "drive:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
+          rclone sync ${{ env.SERVER_DIR }} "driver:${{ steps.config.outputs.DRIVE_FOLDER }}" -P
