@@ -13,13 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      # 1. Cài ngrok bằng APT (cách đáng tin cậy nhất)
       - name: Install ngrok via APT
         run: |
-          # Thêm key và repository của ngrok
           curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com bookworm main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          # Cập nhật và cài đặt
           sudo apt update
           sudo apt install -y ngrok
 
@@ -39,18 +36,28 @@ jobs:
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
 
-          # 4. Cấu hình authtoken cho ngrok
+          # 4. Cấu hình authtoken
           ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
 
-          # 5. Chạy ngrok tunnel tới cổng 22
+          # 5. Chạy ngrok tunnel (ghi log ra file và console)
           echo "🔄 Đang tạo ngrok tunnel..."
           ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
-          sleep 5
+          NGROK_PID=$!
 
-          # 6. Lấy địa chỉ tunnel
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
+          # 6. Đợi tunnel khởi tạo (tối đa 20 giây)
+          echo "⏳ Đợi tunnel khởi tạo..."
+          for i in {1..10}; do
+            sleep 2
+            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null | sed 's/tcp:\/\///')
+            if [ -n "$NGROK_URL" ]; then
+              break
+            fi
+            echo "   Đã đợi $((i*2)) giây..."
+          done
+
+          # 7. Kiểm tra và in kết quả
           if [ -z "$NGROK_URL" ]; then
-            echo "❌ Không thể lấy URL tunnel. Kiểm tra log:"
+            echo "❌ Không lấy được URL tunnel. In log ngrok:"
             cat ngrok.log
             exit 1
           fi
@@ -65,5 +72,5 @@ jobs:
           echo "   Username: runner"
           echo "   Password: ..."
 
-          # 7. Giữ workflow chạy
-          wait
+          # 8. Giữ workflow chạy
+          wait $NGROK_PID
