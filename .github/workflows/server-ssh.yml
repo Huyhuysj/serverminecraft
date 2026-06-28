@@ -117,10 +117,16 @@ jobs:
 
           case "$SERVER_TYPE" in
             mohist)
-              echo "⬇️ Đang tải Mohist $MC_VER..."
-              wget -O server.jar "https://ci.mohistmc.com/job/Mohist-${MC_VER}/lastSuccessfulBuild/artifact/build/libs/mohist-${MC_VER}-server.jar" || \
-              wget -O server.jar "https://serverjars.com/api/fetchJar/modded/mohist/${MC_VER}" || \
-              { echo "❌ Không tìm thấy Mohist $MC_VER"; exit 1; }
+              echo "⬇️ Đang tìm Mohist $MC_VER mới nhất..."
+              MOHIST_DIR="Mohist-${MC_VER}"
+              INDEX_URL="https://mohistmc.com/builds-raw/${MOHIST_DIR}/"
+              MOHIST_FILE=$(curl -s "$INDEX_URL" | grep -oP "${MOHIST_DIR}-[0-9]+\\.jar" | sort -V | tail -1)
+              if [ -z "$MOHIST_FILE" ]; then
+                echo "❌ Không tìm thấy Mohist $MC_VER trong builds-raw"
+                exit 1
+              fi
+              echo "✅ Tìm thấy: $MOHIST_FILE"
+              wget -O server.jar "${INDEX_URL}${MOHIST_FILE}"
               ;;
             forge)
               echo "⬇️ Đang tải Forge $MC_VER..."
@@ -129,19 +135,18 @@ jobs:
               ;;
             paper)
               echo "⬇️ Đang tải Paper $MC_VER..."
-              wget -O server.jar "https://serverjars.com/api/fetchJar/vanilla/paper/${MC_VER}" || \
-              wget -O server.jar "https://papermc.io/api/v2/projects/paper/versions/${MC_VER}/builds/latest/downloads/paper-${MC_VER}-latest.jar" || \
+              wget -O server.jar "https://api.papermc.io/v2/projects/paper/versions/${MC_VER}/builds/latest/downloads/paper-${MC_VER}-latest.jar" || \
               { echo "❌ Không tìm thấy Paper $MC_VER"; exit 1; }
               ;;
             purpur)
               echo "⬇️ Đang tải Purpur $MC_VER..."
-              wget -O server.jar "https://serverjars.com/api/fetchJar/vanilla/purpur/${MC_VER}" || \
+              wget -O server.jar "https://api.purpurmc.org/v2/purpur/${MC_VER}/latest/download" || \
               { echo "❌ Không tìm thấy Purpur $MC_VER"; exit 1; }
               ;;
             spigot)
               echo "⬇️ Đang tải Spigot $MC_VER..."
-              wget -O server.jar "https://serverjars.com/api/fetchJar/vanilla/spigot/${MC_VER}" || \
               wget -O server.jar "https://cdn.getbukkit.org/spigot/spigot-${MC_VER}.jar" || \
+              wget -O server.jar "https://serverjars.com/api/fetchJar/vanilla/spigot/${MC_VER}" || \
               { echo "❌ Không tìm thấy Spigot $MC_VER"; exit 1; }
               ;;
             vanilla)
@@ -157,12 +162,9 @@ jobs:
 
           echo "✅ Đã tải server.jar ($SERVER_TYPE $MC_VER)"
 
-          # Tạo eula.txt nếu chưa có
           if [ ! -f "eula.txt" ]; then
             echo "eula=true" > eula.txt
           fi
-
-          # Tạo server.properties nếu chưa có
           if [ ! -f "server.properties" ]; then
             echo "server-port=25565" > server.properties
           fi
@@ -175,28 +177,12 @@ jobs:
           MC_VER="${{ github.event.inputs.mc_version }}"
           RAM="${{ github.event.inputs.ram }}"
 
-          # Nếu mode backup-only: chỉ nén và upload, không chạy server
           if [ "$ACTION_MODE" = "backup-only" ]; then
-            echo "⚡ Chế độ BACKUP-ONLY — chỉ nén và upload backup..."
-            cd "${GITHUB_WORKSPACE}"
-            zip -r -q backup.zip ./server_minecraft
-
-            echo "📤 Đang upload backup lên PikaMC..."
-            HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST \
-              -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
-              -F "backup=@backup.zip" \
-              "${{ vars.PIKAMC_URL }}/upload")
-
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ Backup lên PikaMC thành công!"
-              rm -f backup.zip
-            else
-              echo "❌ Backup thất bại (Mã: $HTTP_STATUS)"
-            fi
+            echo "⚡ Chế độ BACKUP-ONLY — bỏ qua chạy server."
             exit 0
           fi
 
-          # ===== KHỞI ĐỘNG NGROK =====
+          # Khởi động Ngrok
           echo "🌐 Đang mở SSH tunnel..."
           ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
           sleep 5
@@ -209,9 +195,7 @@ jobs:
           echo "✅ SSH Tunnel ready!"
           echo "$NGROK_URL" > /home/runner/ngrok_url.txt
 
-          # ============================================
-          # IN THÔNG TIN KẾT NỐI NGAY TẠI ĐÂY
-          # ============================================
+          # In thông tin kết nối ngay
           echo "=============================================="
           echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
           echo "🎮 Server: $SERVER_TYPE $MC_VER"
@@ -221,7 +205,6 @@ jobs:
           echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
           echo "=============================================="
 
-          # Export biến môi trường cho script con
           export SERVER_DIR="${GITHUB_WORKSPACE}/server_minecraft"
           export WORK_DIR="${GITHUB_WORKSPACE}"
           export RAM="$RAM"
@@ -238,7 +221,6 @@ jobs:
             echo "🔧 Đang cài đặt server ($SERVER_TYPE)..."
             java -jar server.jar --installServer 2>/dev/null || true
 
-            # Tìm file jar thực tế sau khi install
             if [ -f "run.sh" ]; then
               echo "✅ Tìm thấy run.sh — dùng script này để chạy"
               RUN_CMD="./run.sh"
@@ -251,20 +233,19 @@ jobs:
               echo "✅ Tìm thấy $MOHIST_JAR"
               RUN_CMD="java -Xmx$RAM -jar $MOHIST_JAR nogui"
             else
-              echo "⚠️ Không tìm thấy jar sau install, dùng server.jar gốc"
+              echo "⚠️ Dùng server.jar gốc"
               RUN_CMD="java -Xmx$RAM -jar server.jar nogui"
             fi
           else
             RUN_CMD="java -Xmx$RAM -jar server.jar nogui"
           fi
 
-          # Khởi động server trong tmux
           tmux kill-session -t mc 2>/dev/null
           tmux new-session -d -s mc
           tmux send-keys -t mc "$RUN_CMD" C-m
           echo "✅ Server đã khởi động trong tmux session 'mc'"
 
-          # Vòng lặp đợi: 4.5h HOẶC force_backup
+          # Vòng lặp: 4.5h HOẶC force_backup
           SECONDS_WAITED=0
           while [ $SECONDS_WAITED -lt 16200 ]; do
             if [ -f /home/runner/force_backup ]; then
@@ -281,7 +262,6 @@ jobs:
           fi
 
           tmux send-keys -t mc "stop" C-m
-
           echo "⏳ Đợi 1 phút để server tắt hoàn toàn..."
           sleep 60
 
@@ -319,22 +299,49 @@ jobs:
           done
           echo "✅ Backup hoàn tất, workflow sẽ kết thúc."
 
-      # ===== HIỂN THỊ THÔNG TIN (dự phòng) =====
-      - name: Hiển thị thông tin kết nối
+      # ===== CLEANUP & BACKUP KHI KẾT THÚC (kể cả bị cancel) =====
+      - name: Cleanup & Backup
+        if: always()
         run: |
-          if [ -f /home/runner/ngrok_url.txt ]; then
-            NGROK_URL=$(cat /home/runner/ngrok_url.txt)
-            echo "=============================================="
-            echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
-            echo "🔗 SSH: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
-            echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
-            echo "⏳ Tự động lưu và chạy lại sau 4.5 giờ nữa."
-            echo "=============================================="
+          echo "🧹 Bắt đầu cleanup..."
+
+          # Nếu server đang chạy trong tmux, stop nó
+          if tmux has-session -t mc 2>/dev/null; then
+            echo "🛑 Đang stop server..."
+            tmux send-keys -t mc "stop" C-m
+            echo "⏳ Đợi 5 phút để server tắt hoàn toàn và lưu dữ liệu..."
+            sleep 300
+          else
+            echo "ℹ️ Không có server nào đang chạy (có thể đã stop hoặc chưa khởi động)"
           fi
 
-      # ===== TỰ ĐỘNG CHẠY LẠI WORKFLOW =====
+          # Backup dữ liệu hiện tại
+          cd "${GITHUB_WORKSPACE}"
+          if [ -d "./server_minecraft" ]; then
+            echo "📦 Đang nén backup..."
+            zip -r -q backup.zip ./server_minecraft
+
+            echo "📤 Đang upload backup lên PikaMC..."
+            HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST \
+              -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
+              -F "backup=@backup.zip" \
+              "${{ vars.PIKAMC_URL }}/upload")
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ Backup lên PikaMC thành công!"
+              rm -f backup.zip
+            else
+              echo "❌ Backup thất bại (Mã: $HTTP_STATUS)"
+            fi
+          else
+            echo "⚠️ Không tìm thấy thư mục server_minecraft để backup"
+          fi
+
+          echo "🧹 Cleanup hoàn tất."
+
+      # ===== TỰ ĐỘNG CHẠY LẠI WORKFLOW (chỉ khi thành công, không khi lỗi/cancel) =====
       - name: Tự động chạy lại workflow
-        if: always()
+        if: success()
         env:
           GH_TOKEN: ${{ vars.GH_PAT }}
         run: |
