@@ -1,4 +1,4 @@
-name: Server + SSH Tunnel (4.5h tự backup qua PikaMC API)
+name: Server + Playit (IP cố định) + SSH Ngrok + Backup PikaMC
 
 on:
   workflow_dispatch:
@@ -237,7 +237,20 @@ jobs:
           echo "✅ Cài đặt hoàn tất (hoặc timeout). Kiểm tra file sau install:"
           ls -la
 
-      - name: Khởi động Server, Ngrok, và gửi target (có delay)
+      - name: Cache Playit agent
+        id: cache-playit
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/playit
+          key: playit-agent-${{ runner.os }}-1.0
+
+      - name: Tải Playit agent nếu chưa cache
+        if: steps.cache-playit.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL https://playit.gg/downloads/playit-linux-amd64 -o /home/runner/playit
+          chmod +x /home/runner/playit
+
+      - name: Khởi động server + Playit + Ngrok
         run: |
           ACTION_MODE="${{ github.event.inputs.action_mode }}"
           if [ "$ACTION_MODE" = "backup-only" ]; then
@@ -252,7 +265,7 @@ jobs:
           JAVA_BIN="/usr/bin/java"
 
           # ===== 1. VIẾT run.sh và khởi động server trước =====
-          cat > /home/runner/run.sh << EOF
+          cat > /home/runner/run.sh << 'RUNSH'
           #!/bin/bash
           exec > /home/runner/run.log 2>&1
           set -x
@@ -266,41 +279,41 @@ jobs:
           JAVA_BIN="${JAVA_BIN}"
 
           echo "========== [run.sh] BẮT ĐẦU =========="
-          echo "📁 SERVER_DIR=\$SERVER_DIR"
-          echo "☕ JAVA_BIN=\$JAVA_BIN"
-          \$JAVA_BIN -version
+          echo "📁 SERVER_DIR=$SERVER_DIR"
+          echo "☕ JAVA_BIN=$JAVA_BIN"
+          $JAVA_BIN -version
 
-          if [ ! -d "\$SERVER_DIR" ]; then
-            echo "❌ Thư mục \$SERVER_DIR không tồn tại!"
+          if [ ! -d "$SERVER_DIR" ]; then
+            echo "❌ Thư mục $SERVER_DIR không tồn tại!"
             exit 1
           fi
 
-          cd "\$SERVER_DIR"
-          echo "📂 Đang ở: \$(pwd)"
+          cd "$SERVER_DIR"
+          echo "📂 Đang ở: $(pwd)"
           ls -la
 
-          if [ "\$SERVER_TYPE" = "forge" ] || [ "\$SERVER_TYPE" = "mohist" ]; then
+          if [ "$SERVER_TYPE" = "forge" ] || [ "$SERVER_TYPE" = "mohist" ]; then
             if [ -f "run.sh" ]; then
               echo "✅ Tìm thấy run.sh"
               chmod +x run.sh
               RUN_CMD="./run.sh"
             elif ls forge-*.jar 1>/dev/null 2>&1; then
-              FORGE_JAR=\$(ls forge-*.jar | head -1)
-              echo "✅ Tìm thấy \$FORGE_JAR"
-              RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar \$FORGE_JAR nogui"
+              FORGE_JAR=$(ls forge-*.jar | head -1)
+              echo "✅ Tìm thấy $FORGE_JAR"
+              RUN_CMD="$JAVA_BIN -Xmx$RAM -jar $FORGE_JAR nogui"
             elif ls mohist-*.jar 1>/dev/null 2>&1; then
-              MOHIST_JAR=\$(ls mohist-*.jar | head -1)
-              echo "✅ Tìm thấy \$MOHIST_JAR"
-              RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar \$MOHIST_JAR nogui"
+              MOHIST_JAR=$(ls mohist-*.jar | head -1)
+              echo "✅ Tìm thấy $MOHIST_JAR"
+              RUN_CMD="$JAVA_BIN -Xmx$RAM -jar $MOHIST_JAR nogui"
             else
               echo "⚠️ Dùng server.jar gốc"
-              RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar server.jar nogui"
+              RUN_CMD="$JAVA_BIN -Xmx$RAM -jar server.jar nogui"
             fi
           else
-            RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar server.jar nogui"
+            RUN_CMD="$JAVA_BIN -Xmx$RAM -jar server.jar nogui"
           fi
 
-          echo "🚀 RUN_CMD: \$RUN_CMD"
+          echo "🚀 RUN_CMD: $RUN_CMD"
 
           tmux kill-session -t mc 2>/dev/null || true
           sleep 1
@@ -312,21 +325,21 @@ jobs:
           fi
           echo "✅ tmux session 'mc' đã tạo"
 
-          tmux send-keys -t mc "cd '\$SERVER_DIR' && \$RUN_CMD" C-m
+          tmux send-keys -t mc "cd '$SERVER_DIR' && $RUN_CMD" C-m
           echo "✅ Đã gửi lệnh khởi động server vào tmux"
 
           SECONDS_WAITED=0
-          while [ \$SECONDS_WAITED -lt 16200 ]; do
+          while [ $SECONDS_WAITED -lt 16200 ]; do
             if [ -f /home/runner/force_backup ]; then
               echo "🚨 Nhận lệnh backup sớm từ user!"
               rm -f /home/runner/force_backup
               break
             fi
             sleep 10
-            SECONDS_WAITED=\$((SECONDS_WAITED + 10))
+            SECONDS_WAITED=$((SECONDS_WAITED + 10))
           done
 
-          if [ \$SECONDS_WAITED -ge 16200 ]; then
+          if [ $SECONDS_WAITED -ge 16200 ]; then
             echo "⏰ Đã 4.5h, đang dừng server..."
           fi
 
@@ -335,39 +348,39 @@ jobs:
           echo "⏳ Đợi 1 phút để server tắt..."
           sleep 60
 
-          rm -f "\$WORK_DIR/backup.zip" "\$WORK_DIR/backup.zip.tmp"
+          rm -f "$WORK_DIR/backup.zip" "$WORK_DIR/backup.zip.tmp"
 
           echo "📦 Đang nén backup..."
-          cd "\$WORK_DIR"
+          cd "$WORK_DIR"
           zip -r -q backup.zip ./server_minecraft
-          BACKUP_SIZE=\$(du -h backup.zip | cut -f1)
-          echo "✅ Đã nén backup: \$BACKUP_SIZE"
+          BACKUP_SIZE=$(du -h backup.zip | cut -f1)
+          echo "✅ Đã nén backup: $BACKUP_SIZE"
 
           echo "📤 Đang upload lên PikaMC..."
-          HTTP_STATUS=\$(curl -s -w "\\nHTTP_CODE:%{http_code}\\nTIME_TOTAL:%{time_total}s\\nSIZE_UPLOAD:%{size_upload}" \
+          HTTP_STATUS=$(curl -s -w "\nHTTP_CODE:%{http_code}\nTIME_TOTAL:%{time_total}s\nSIZE_UPLOAD:%{size_upload}" \
             -o /tmp/upload_response.txt \
             --max-time 600 \
             -X POST \
-            -H "x-api-key: \$PIKAMC_API_KEY" \
+            -H "x-api-key: $PIKAMC_API_KEY" \
             -F "backup=@backup.zip" \
-            "\$PIKAMC_URL/upload" | grep -E "HTTP_CODE|TIME_TOTAL|SIZE_UPLOAD")
+            "$PIKAMC_URL/upload" | grep -E "HTTP_CODE|TIME_TOTAL|SIZE_UPLOAD")
 
           echo "📊 Kết quả upload:"
-          echo "\$HTTP_STATUS"
+          echo "$HTTP_STATUS"
           cat /tmp/upload_response.txt || true
 
-          HTTP_CODE=\$(echo "\$HTTP_STATUS" | grep HTTP_CODE | cut -d: -f2)
+          HTTP_CODE=$(echo "$HTTP_STATUS" | grep HTTP_CODE | cut -d: -f2)
 
-          if [ "\$HTTP_CODE" = "200" ]; then
+          if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ Backup thành công!"
             rm -f backup.zip
           else
-            echo "❌ Backup thất bại (Mã: \$HTTP_CODE)"
+            echo "❌ Backup thất bại (Mã: $HTTP_CODE)"
           fi
 
           touch /home/runner/backup_done
           echo "========== [run.sh] HOÀN TẤT =========="
-          EOF
+          RUNSH
 
           chmod +x /home/runner/run.sh
 
@@ -378,7 +391,6 @@ jobs:
           tmux send-keys -t controller "cd /home/runner && ./run.sh" C-m
 
           echo "⏳ Đợi server Minecraft sẵn sàng..."
-          # Đợi tối đa 60 giây cho đến khi thấy port 25565 được lắng nghe
           for i in {1..12}; do
             if ss -tlnp | grep -q ":25565"; then
               echo "✅ Minecraft server đang lắng nghe port 25565!"
@@ -392,8 +404,16 @@ jobs:
             echo "❌ Server vẫn chưa mở port sau 60 giây, nhưng vẫn tiếp tục..."
           fi
 
-          # ===== 2. KHỞI ĐỘNG NGROK SSH =====
-          echo "🌐 Đang mở SSH tunnel..."
+          # ===== 2. KHỞI ĐỘNG PLAYIT (IP cố định) =====
+          echo "🌐 Đang chạy Playit agent..."
+          echo "${{ vars.PLAYIT_AGENT_KEY }}" | /home/runner/playit secret login
+          /home/runner/playit > playit.log 2>&1 &
+          sleep 3
+          echo "✅ Playit agent đã chạy!"
+          echo "🎮 Minecraft IP cố định: ${{ vars.PLAYIT_HOSTNAME }}"
+
+          # ===== 3. KHỞI ĐỘNG NGROK SSH =====
+          echo "🔑 Đang mở SSH tunnel qua Ngrok..."
           ngrok tcp 22 --log=stdout > ngrok_ssh.log 2>&1 &
           sleep 5
           NGROK_SSH_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
@@ -406,28 +426,20 @@ jobs:
           SSH_PORT=$(echo "$NGROK_SSH_URL" | cut -d: -f2)
           echo "✅ Ngrok SSH: $SSH_HOST:$SSH_PORT"
 
-          # ===== 3. GỬI TARGET CHO PIKAMC =====
-          echo "📤 Đang gửi target cho PikaMC..."
-          curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
-            -d "{\"host\":\"$SSH_HOST\",\"port\":$SSH_PORT,\"ssh_password\":\"${{ github.event.inputs.ssh_password }}\"}" \
-            "${{ vars.PIKAMC_URL }}/update-mc-target"
-          echo "✅ Đã gửi target"
-
           # ===== 4. IN THÔNG TIN KẾT NỐI =====
           echo "=============================================="
           echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
           echo "🎮 Server: $SERVER_TYPE $MC_VER"
           echo ""
-          echo "🎮 MINECRAFT (IP CỐ ĐỊNH):"
-          echo "   kinetic.pikamc.vn:${MC_PROXY_PORT}"   # <-- bạn có thể sửa thành 25567 hoặc dùng biến, nhưng static cũng được
+          echo "🎮 MINECRAFT (IP CỐ ĐỊNH - KHÔNG ĐỔI):"
+          echo "   ${{ vars.PLAYIT_HOSTNAME }}"
           echo ""
-          echo "🔑 SSH (Ngrok):"
+          echo "🔑 SSH (Ngrok - đổi mỗi lần chạy):"
           echo "   ssh -p $SSH_PORT runner@$SSH_HOST"
           echo "   Mật khẩu: ${{ github.event.inputs.ssh_password }}"
           echo ""
           echo "⏳ Tự động backup sau 4.5 giờ."
+          echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
           echo "=============================================="
 
           # Theo dõi cho đến khi backup_done xuất hiện thì workflow kết thúc
@@ -436,7 +448,7 @@ jobs:
           done
           echo "✅ Backup hoàn tất, workflow sẽ kết thúc."
 
-      - name: Cleanup & Backup
+      - name: Cleanup & Backup (dự phòng)
         if: always()
         run: |
           if [ -f /home/runner/backup_done ]; then
