@@ -265,14 +265,14 @@ jobs:
           SSH_PORT=$(echo "$NGROK_SSH_URL" | cut -d: -f2)
           echo "✅ Ngrok SSH: $SSH_HOST:$SSH_PORT"
 
-          # ===== 2. GỬI TARGET CHO PIKAMC (CẢ MC VÀ SSH) =====
+                    # ===== 2. GỬI TARGET CHO PIKAMC (CHỈ MINECRAFT) =====
           echo "📤 Đang gửi target cho PikaMC..."
 
           curl -s -X POST \
             -H "Content-Type: application/json" \
             -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
             -d "{\"host\":\"$SSH_HOST\",\"port\":$SSH_PORT,\"ssh_password\":\"${{ github.event.inputs.ssh_password }}\"}" \
-            "${{ vars.PIKAMC_URL }}/update-targets"
+            "${{ vars.PIKAMC_URL }}/update-mc-target"
           echo "✅ Đã gửi target"
 
           # ===== 3. IN THÔNG TIN KẾT NỐI =====
@@ -283,12 +283,9 @@ jobs:
           echo "🎮 MINECRAFT (IP CỐ ĐỊNH):"
           echo "   kinetic.pikamc.vn:25565"
           echo ""
-          echo "🔑 SSH (IP CỐ ĐỊNH):"
-          echo "   ssh -p 25522 runner@kinetic.pikamc.vn"
-          echo "   Mật khẩu: ${{ github.event.inputs.ssh_password }}"
-          echo ""
-          echo "🔄 Ngrok SSH (dự phòng):"
+          echo "🔑 SSH (Ngrok - đổi mỗi lần):"
           echo "   ssh -p $SSH_PORT runner@$SSH_HOST"
+          echo "   Mật khẩu: ${{ github.event.inputs.ssh_password }}"
           echo ""
           echo "⏳ Tự động backup sau 4.5 giờ."
           echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
