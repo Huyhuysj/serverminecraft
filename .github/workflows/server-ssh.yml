@@ -73,18 +73,21 @@ jobs:
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
 
-      # ===== LẤY DỮ LIỆU TỪ DRIVE =====
+      # ===== LẤY DỮ LIỆU TỪ DRIVE (ĐÃ SỬA) =====
       - name: Chuẩn bị dữ liệu Server
         run: |
           mkdir -p ./server_minecraft
+          rclone mkdir "driver:MC_Server/server_minecraft" 2>/dev/null || true
           rclone sync "driver:MC_Server/server_minecraft" ./server_minecraft -P --drive-acknowledge-abuse || true
           cd ./server_minecraft
-          if [ ! -f "server.jar" ] || ! java -jar server.jar --version &>/dev/null; then
-            echo "📦 Tải và cài đặt Mohist 1.12.2..."
+
+          # Kiểm tra và tải server.jar
+          if [ ! -f "server.jar" ] || ! java -jar server.jar --version &>/dev/null 2>&1; then
+            echo "📦 Tải Mohist 1.12.2 từ Jenkins CI..."
             rm -f server.jar
-            curl -L -o mohist-installer.jar https://mohistmc.com/api/v2/versions/1.12.2/download
-            java -jar mohist-installer.jar --installServer
-            rm -f mohist-installer.jar
+            # Dùng wget với link từ Jenkins
+            wget -O server.jar "https://ci.mohistmc.com/job/Mohist-1.12.2/lastSuccessfulBuild/artifact/target/mohist-server-1.12.2-*.jar" || \
+            wget -O server.jar "https://cdn.getbukkit.org/spigot/spigot-1.12.2.jar"
             echo "eula=true" > eula.txt
             if [ ! -f "server.properties" ]; then
               echo "server-port=25565" > server.properties
