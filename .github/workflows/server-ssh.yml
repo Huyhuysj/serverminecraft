@@ -1,4 +1,4 @@
-name: Server + SSH Tunnel (5h tự dừng & tự bật lại)
+name: Server + SSH Tunnel (4.5h tự backup qua PikaMC API)
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ on:
 jobs:
   server:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 330
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
       - name: Cài đặt công cụ
         run: |
           sudo apt update
-          sudo apt install -y tmux rclone screen curl unzip jq wget openssh-server
+          sudo apt install -y tmux curl unzip jq wget openssh-server zip
 
       # ===== CÀI JAVA =====
       - name: Cài đặt Java ${{ github.event.inputs.java_version }}
@@ -42,16 +42,6 @@ jobs:
             *)  echo "❌ Java không hợp lệ"; exit 1 ;;
           esac
           java -version
-
-      # ===== RCLONE =====
-      - name: Cài đặt Rclone
-        run: |
-          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.deb
-          sudo dpkg -i rclone-current-linux-amd64.deb
-          mkdir -p ~/.config/rclone
-          cat << 'EOF' > ~/.config/rclone/rclone.conf
-          ${{ vars.RCLONE_DRIVE_TOKEN_VAR }}
-          EOF
 
       # ===== NGROK =====
       - name: Cài đặt Ngrok
@@ -73,31 +63,35 @@ jobs:
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
 
-      # ===== LẤY DỮ LIỆU TỪ DRIVE (ĐÃ SỬA) =====
-      - name: Chuẩn bị dữ liệu Server
+      # ===== LẤY DỮ LIỆU TỪ HOSTING PIKAMC =====
+      - name: Tải dữ liệu Server từ PikaMC
         run: |
           mkdir -p ./server_minecraft
-          rclone mkdir "driver:MC_Server/server_minecraft" 2>/dev/null || true
-          rclone sync "driver:MC_Server/server_minecraft" ./server_minecraft -P --drive-acknowledge-abuse || true
           cd ./server_minecraft
-
-          # Kiểm tra và tải server.jar
-          if [ ! -f "server.jar" ] || ! java -jar server.jar --version &>/dev/null 2>&1; then
-            echo "📦 Tải Mohist 1.12.2 từ Jenkins CI..."
-            rm -f server.jar
-            # Dùng wget với link từ Jenkins
+          
+          echo "Đang tải file backup từ PikaMC API..."
+          # Đổi sang vars
+          HTTP_STATUS=$(curl -s -w "%{http_code}" -o backup.zip \
+            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
+            "${{ vars.PIKAMC_URL }}/download")
+          
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Tải backup thành công. Đang giải nén..."
+            unzip -o backup.zip
+            rm -f backup.zip
+          else
+            echo "⚠️ Không có backup trước đó (Mã: $HTTP_STATUS). Bắt đầu tải server.jar mới..."
+            rm -f backup.zip
             wget -O server.jar "https://ci.mohistmc.com/job/Mohist-1.12.2/lastSuccessfulBuild/artifact/target/mohist-server-1.12.2-*.jar" || \
             wget -O server.jar "https://cdn.getbukkit.org/spigot/spigot-1.12.2.jar"
             echo "eula=true" > eula.txt
             if [ ! -f "server.properties" ]; then
               echo "server-port=25565" > server.properties
             fi
-          else
-            echo "✅ Server.jar đã tồn tại và hợp lệ."
           fi
 
-      # ===== CHẠY NGrok + SERVER + TIMER 5h =====
-      - name: Khởi động Ngrok, Server và Timer 5h
+      # ===== CHẠY NGrok + SERVER + TIMER 4.5h =====
+      - name: Khởi động Ngrok, Server và Timer 4.5h
         run: |
           echo "🌐 Đang mở SSH tunnel..."
           ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
@@ -109,14 +103,13 @@ jobs:
             exit 1
           fi
           echo "✅ SSH Tunnel ready!"
-          echo "🔗 Kết nối: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
-          echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
           echo "$NGROK_URL" > /home/runner/ngrok_url.txt
 
           cat > /home/runner/run.sh << 'EOF'
           #!/bin/bash
           SERVER_DIR="$(pwd)/server_minecraft"
           RAM="${{ github.event.inputs.ram }}"
+          WORK_DIR="$(pwd)"
 
           cd "$SERVER_DIR"
           tmux kill-session -t mc 2>/dev/null
@@ -124,18 +117,32 @@ jobs:
           tmux send-keys -t mc "java -Xmx$RAM -jar server.jar nogui" C-m
           echo "✅ Server đã khởi động trong tmux session 'mc'"
 
-          sleep 18000
+          sleep 16200
 
-          echo "⏰ Đã 5h, đang dừng server..."
+          echo "⏰ Đã 4.5h, đang dừng server..."
           tmux send-keys -t mc "stop" C-m
 
-          echo "⏳ Đợi 5 phút để server tắt hoàn toàn..."
-          sleep 300
+          echo "⏳ Đợi 1 phút để server tắt hoàn toàn..."
+          sleep 60
 
-          echo "📤 Đang backup lần cuối lên Drive..."
-          rclone sync "$SERVER_DIR" "driver:MC_Server/server_minecraft" -P --drive-acknowledge-abuse
+          echo "📦 Đang nén dữ liệu để backup..."
+          cd "$WORK_DIR"
+          zip -r -q backup.zip ./server_minecraft
+          
+          echo "📤 Đang upload backup lên PikaMC..."
+          # Đổi sang vars
+          HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST \
+            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
+            -F "backup=@backup.zip" \
+            "${{ vars.PIKAMC_URL }}/upload")
+            
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Backup lên PikaMC thành công!"
+            rm -f backup.zip
+          else
+            echo "❌ Backup thất bại (Mã: $HTTP_STATUS)"
+          fi
 
-          echo "✅ Hoàn thành! Server đã dừng và backup."
           touch /home/runner/backup_done
           EOF
 
@@ -144,8 +151,8 @@ jobs:
           tmux new-session -d -s controller
           tmux send-keys -t controller "cd /home/runner && ./run.sh" C-m
 
-          echo "⏳ Server sẽ chạy 5h, sau đó tự dừng và backup."
-          echo "📌 Bạn có thể SSH vào để xem log server: tmux attach -t mc"
+          echo "⏳ Server đang chạy. Sẽ tự backup sau 4.5 giờ."
+          echo "📌 Bạn có thể SSH vào để xem log: tmux attach -t mc"
 
           while ! [ -f /home/runner/backup_done ]; do
             sleep 10
@@ -161,6 +168,7 @@ jobs:
             echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
             echo "🔗 SSH: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
             echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+            echo "⏳ Tự động lưu và chạy lại sau 4.5 giờ nữa."
             echo "=============================================="
           fi
 
@@ -168,7 +176,8 @@ jobs:
       - name: Tự động chạy lại workflow
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Đổi sang vars
+          GH_TOKEN: ${{ vars.GH_PAT }}
         run: |
           echo "🔄 Đang trigger workflow mới để chạy tiếp..."
           gh workflow run "server-ssh.yml" \
