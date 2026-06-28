@@ -12,9 +12,9 @@ on:
         required: true
         default: '15G'
       java_version:
-        description: '☕ Java (11, 17, 21) — Java 8 không hỗ trợ trên Ubuntu 24.04'
+        description: '☕ Java (8, 11, 17, 21)'
         required: true
-        default: '17'
+        default: '8'
       mc_version:
         description: '🎮 Phiên bản Minecraft (vd: 1.12.2, 1.16.5, 1.20.1)'
         required: true
@@ -45,28 +45,66 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y tmux curl unzip jq wget openssh-server zip
+          sudo add-apt-repository universe -y 2>/dev/null || true
+          sudo apt update
 
       # ===== CÀI JAVA =====
       - name: Cài đặt Java ${{ github.event.inputs.java_version }}
         run: |
           JAVA_VER=${{ github.event.inputs.java_version }}
           case $JAVA_VER in
+            8)  sudo apt install -y openjdk-8-jdk ;;
             11) sudo apt install -y openjdk-11-jdk ;;
             17) sudo apt install -y openjdk-17-jdk ;;
             21) sudo apt install -y openjdk-21-jdk ;;
-            *) echo "❌ Chỉ hỗ trợ Java 11, 17, 21 trên Ubuntu 24.04"; exit 1 ;;
+            *) echo "❌ Java không hợp lệ"; exit 1 ;;
           esac
 
-          # Tìm đường dẫn java chính xác
+          # Tìm JAVA_HOME chính xác
           JAVA_HOME=$(ls -d /usr/lib/jvm/java-${JAVA_VER}-openjdk-* 2>/dev/null | head -1)
           if [ -z "$JAVA_HOME" ]; then
             JAVA_HOME=$(ls -d /usr/lib/jvm/java-${JAVA_VER}-* 2>/dev/null | head -1)
           fi
-          sudo update-alternatives --install /usr/bin/java java "$JAVA_HOME/bin/java" 1
+
+          # XÓA TẤT CẢ java/javac cũ trước khi cài mới (đảm bảo chỉ có 1 version)
+          sudo rm -f /usr/bin/java /usr/bin/javac 2>/dev/null || true
+
+          # Tạo symlink trực tiếp vào /usr/bin (ưu tiên cao nhất)
+          sudo ln -sf "$JAVA_HOME/bin/java" /usr/bin/java
+          sudo ln -sf "$JAVA_HOME/bin/javac" /usr/bin/javac
+
+          # Cập nhật alternatives (backup)
+          sudo update-alternatives --install /usr/bin/java java "$JAVA_HOME/bin/java" 9999
           sudo update-alternatives --set java "$JAVA_HOME/bin/java"
-          export JAVA_HOME
+          sudo update-alternatives --install /usr/bin/javac javac "$JAVA_HOME/bin/javac" 9999
+          sudo update-alternatives --set javac "$JAVA_HOME/bin/javac"
+
+          # Tạo file profile cho tất cả user (bao gồm runner SSH)
+          sudo tee /etc/profile.d/99-java.sh > /dev/null << 'PROFILE'
+          export JAVA_HOME=$(readlink -f /usr/bin/java | sed 's|/bin/java||')
+          export PATH=/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
+          PROFILE
+          sudo chmod +x /etc/profile.d/99-java.sh
+
+          # Ghi đè .bashrc của runner để Java 8 luôn ưu tiên
+          sudo tee /home/runner/.bashrc_java > /dev/null << 'BASHRC'
+          # Java priority - always use the installed version
+          export JAVA_HOME=$(readlink -f /usr/bin/java | sed 's|/bin/java||')
+          export PATH=/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
+          BASHRC
+          sudo bash -c 'cat /home/runner/.bashrc_java >> /home/runner/.bashrc'
+          sudo rm -f /home/runner/.bashrc_java
+
+          # Export cho step hiện tại
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          export JAVA_HOME
+          export PATH="$JAVA_HOME/bin:$PATH"
+
+          # Kiểm tra
+          echo "=== Kiểm tra Java ==="
+          which java
           java -version
+          echo "JAVA_HOME=$JAVA_HOME"
 
       # ===== NGROK =====
       - name: Cài đặt Ngrok
@@ -195,7 +233,7 @@ jobs:
           MC_VER="${{ github.event.inputs.mc_version }}"
           RAM="${{ github.event.inputs.ram }}"
           WORKSPACE="${GITHUB_WORKSPACE}"
-          JAVA_BIN="${JAVA_HOME}/bin/java"
+          JAVA_BIN="/usr/bin/java"
 
           # Khởi động Ngrok
           echo "🌐 Đang mở SSH tunnel..."
@@ -220,7 +258,7 @@ jobs:
           echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
           echo "=============================================="
 
-          # VIẾT run.sh VỚI GIÁ TRỊ HARDCODE (không dùng export + heredoc 'EOF')
+          # VIẾT run.sh VỚI GIÁ TRỊ HARDCODE
           cat > /home/runner/run.sh << EOF
           #!/bin/bash
           exec > /home/runner/run.log 2>&1
@@ -335,7 +373,7 @@ jobs:
 
           chmod +x /home/runner/run.sh
 
-          # Chạy run.sh trong tmux controller (để giữ sống và log)
+          # Chạy run.sh trong tmux controller
           tmux kill-session -t controller 2>/dev/null || true
           tmux new-session -d -s controller
           sleep 1
