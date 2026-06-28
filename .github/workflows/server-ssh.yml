@@ -139,7 +139,6 @@ jobs:
                 unzip -o backup.zip
                 rm -f backup.zip
 
-                # FIX: Nếu backup giải nén ra thư mục con server_minecraft/, di chuyển file lên
                 if [ -d "./server_minecraft" ]; then
                   echo "🔄 Phát hiện thư mục lồng server_minecraft/, đang di chuyển file lên..."
                   mv ./server_minecraft/* . 2>/dev/null || true
@@ -228,7 +227,19 @@ jobs:
             echo "server-port=25565" > server.properties
           fi
 
-      - name: Khởi động Ngrok, Server và Timer 4.5h
+      - name: Cài đặt server (Mohist/Forge)
+        if: github.event.inputs.server_type == 'mohist' || github.event.inputs.server_type == 'forge'
+        run: |
+          cd ./server_minecraft
+          echo "🔧 Đang cài đặt server (${{ github.event.inputs.server_type }})..."
+          echo "📂 Đang ở: $(pwd)"
+          ls -la
+          timeout 120 java -jar server.jar --installServer || true
+          echo "✅ Cài đặt hoàn tất (hoặc timeout). Kiểm tra file sau install:"
+          ls -la
+
+      # ===== KHỞI ĐỘNG NGROK + GỬI TARGET CHO PIKAMC PROXY =====
+      - name: Khởi động Ngrok, gửi target cho PikaMC Proxy, và chạy Server
         run: |
           ACTION_MODE="${{ github.event.inputs.action_mode }}"
           if [ "$ACTION_MODE" = "backup-only" ]; then
@@ -242,28 +253,73 @@ jobs:
           WORKSPACE="${GITHUB_WORKSPACE}"
           JAVA_BIN="/usr/bin/java"
 
-          # Khởi động Ngrok
+          # ===== 1. KHỞI ĐỘNG NGROK SSH (port 22) =====
           echo "🌐 Đang mở SSH tunnel..."
-          ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+          ngrok tcp 22 --log=stdout > ngrok_ssh.log 2>&1 &
           sleep 5
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
-          if [ -z "$NGROK_URL" ]; then
-            echo "❌ Không lấy được URL tunnel:"
-            cat ngrok.log
+          NGROK_SSH_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
+          if [ -z "$NGROK_SSH_URL" ]; then
+            echo "❌ Không lấy được SSH tunnel:"
+            cat ngrok_ssh.log
             exit 1
           fi
-          echo "✅ SSH Tunnel ready!"
-          echo "$NGROK_URL" > /home/runner/ngrok_url.txt
+          SSH_HOST=$(echo "$NGROK_SSH_URL" | cut -d: -f1)
+          SSH_PORT=$(echo "$NGROK_SSH_URL" | cut -d: -f2)
+          echo "✅ SSH Tunnel: $SSH_HOST:$SSH_PORT"
 
+          # ===== 2. KHỞI ĐỘNG NGROK MINECRAFT (port 25565) =====
+          echo "🎮 Đang mở Minecraft tunnel..."
+          ngrok tcp 25565 --log=stdout > ngrok_mc.log 2>&1 &
+          sleep 5
+          NGROK_MC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[1].public_url' | sed 's/tcp:\/\///')
+          if [ -z "$NGROK_MC_URL" ]; then
+            echo "❌ Không lấy được Minecraft tunnel:"
+            cat ngrok_mc.log
+            exit 1
+          fi
+          MC_HOST=$(echo "$NGROK_MC_URL" | cut -d: -f1)
+          MC_PORT=$(echo "$NGROK_MC_URL" | cut -d: -f2)
+          echo "✅ Minecraft Tunnel: $MC_HOST:$MC_PORT"
+
+          # ===== 3. GỬI TARGET CHO PIKAMC PROXY =====
+          echo "📤 Đang gửi target cho PikaMC Proxy..."
+
+          # Gửi SSH target
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
+            -d "{\"host\":\"$SSH_HOST\",\"port\":$SSH_PORT}" \
+            "${{ vars.PIKAMC_URL }}/update-ssh-target"
+          echo "✅ SSH target đã gửi"
+
+          # Gửi Minecraft target
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
+            -d "{\"host\":\"$MC_HOST\",\"port\":$MC_PORT}" \
+            "${{ vars.PIKAMC_URL }}/update-mc-target"
+          echo "✅ Minecraft target đã gửi"
+
+          # Lưu SSH info để hiển thị
+          echo "$NGROK_SSH_URL" > /home/runner/ngrok_url.txt
+
+          # ===== 4. IN THÔNG TIN KẾT NỐI =====
           echo "=============================================="
           echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
           echo "🎮 Server: $SERVER_TYPE $MC_VER"
-          echo "🔗 SSH: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
-          echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+          echo ""
+          echo "🎮 MINECRAFT (IP CỐ ĐỊNH):"
+          echo "   kinetic.pikamc.vn:25565"
+          echo ""
+          echo "🔑 SSH (IP CỐ ĐỊNH):"
+          echo "   ssh -p 25522 runner@kinetic.pikamc.vn"
+          echo "   Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+          echo ""
           echo "⏳ Tự động backup sau 4.5 giờ."
           echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
           echo "=============================================="
 
+          # ===== 5. VIẾT run.sh =====
           cat > /home/runner/run.sh << EOF
           #!/bin/bash
           exec > /home/runner/run.log 2>&1
@@ -291,12 +347,8 @@ jobs:
           echo "📂 Đang ở: \$(pwd)"
           ls -la
 
-          # Xử lý Forge/Mohist installer
+          # Tìm lệnh chạy server
           if [ "\$SERVER_TYPE" = "forge" ] || [ "\$SERVER_TYPE" = "mohist" ]; then
-            echo "🔧 Đang cài đặt server (\$SERVER_TYPE)..."
-            \$JAVA_BIN -jar server.jar --installServer || true
-            sleep 2
-
             if [ -f "run.sh" ]; then
               echo "✅ Tìm thấy run.sh"
               chmod +x run.sh
@@ -319,6 +371,7 @@ jobs:
 
           echo "🚀 RUN_CMD: \$RUN_CMD"
 
+          # Tạo tmux session mc
           tmux kill-session -t mc 2>/dev/null || true
           sleep 1
           tmux new-session -d -s mc
@@ -353,7 +406,7 @@ jobs:
           echo "⏳ Đợi 1 phút để server tắt..."
           sleep 60
 
-          # FIX: Xóa file backup.zip cũ trước khi nén (tránh treo khi upload)
+          # Xóa file backup.zip cũ trước khi nén
           echo "🗑️ Xóa file backup.zip cũ nếu có..."
           rm -f "\$WORK_DIR/backup.zip"
           rm -f "\$WORK_DIR/backup.zip.tmp"
@@ -368,7 +421,6 @@ jobs:
           echo "🔗 URL: \$PIKAMC_URL/upload"
           echo "⏱️ Bắt đầu upload lúc: \$(date)"
 
-          # Upload với timeout và verbose
           HTTP_STATUS=\$(curl -s -w "\\nHTTP_CODE:%{http_code}\\nTIME_TOTAL:%{time_total}s\\nSIZE_UPLOAD:%{size_upload}" \
             -o /tmp/upload_response.txt \
             --max-time 600 \
@@ -389,7 +441,6 @@ jobs:
             rm -f backup.zip
           else
             echo "❌ Backup thất bại (Mã: \$HTTP_CODE)"
-            echo "💡 Gợi ý: Kiểm tra log PikaMC server để biết chi tiết lỗi"
           fi
 
           touch /home/runner/backup_done
@@ -421,6 +472,46 @@ jobs:
             sleep 10
           done
           echo "✅ Backup hoàn tất, workflow sẽ kết thúc."
+
+            # ===== LẤY PORT PROXY TỪ PIKAMC =====
+      - name: Lấy thông tin proxy port từ PikaMC
+        run: |
+          echo "📡 Đang lấy thông tin proxy port..."
+          PROXY_INFO=$(curl -s --max-time 10 \
+            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
+            "${{ vars.PIKAMC_URL }}/proxy-info")
+          
+          echo "📊 Proxy info: $PROXY_INFO"
+          
+          MC_PROXY_PORT=$(echo "$PROXY_INFO" | jq -r '.minecraft.proxy' | cut -d: -f2)
+          SSH_PROXY_PORT=$(echo "$PROXY_INFO" | jq -r '.ssh.proxy' | cut -d: -f2)
+          
+          echo "MINECRAFT_PROXY=$MC_PROXY_PORT" >> $GITHUB_ENV
+          echo "SSH_PROXY=$SSH_PROXY_PORT" >> $GITHUB_ENV
+          
+          echo "🎮 Minecraft proxy port: $MC_PROXY_PORT"
+          echo "🔑 SSH proxy port: $SSH_PROXY_PORT"
+
+      # ===== IN THÔNG TIN KẾT NỐI (sửa lại) =====
+      - name: Khởi động Ngrok, gửi target cho PikaMC Proxy, và chạy Server
+        run: |
+          # ... (phần khởi động Ngrok giữ nguyên)
+          
+          # Sửa phần in thông tin:
+          echo "=============================================="
+          echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
+          echo "🎮 Server: $SERVER_TYPE $MC_VER"
+          echo ""
+          echo "🎮 MINECRAFT (IP CỐ ĐỊNH):"
+          echo "   kinetic.pikamc.vn:${MINECRAFT_PROXY:-25565}"
+          echo ""
+          echo "🔑 SSH (IP CỐ ĐỊNH):"
+          echo "   ssh -p ${SSH_PROXY:-25522} runner@kinetic.pikamc.vn"
+          echo "   Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+          echo ""
+          echo "⏳ Tự động backup sau 4.5 giờ."
+          echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
+          echo "=============================================="
 
       - name: Cleanup & Backup
         if: always()
