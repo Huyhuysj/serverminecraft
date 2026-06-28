@@ -237,18 +237,20 @@ jobs:
           echo "✅ Cài đặt hoàn tất (hoặc timeout). Kiểm tra file sau install:"
           ls -la
 
-      - name: Cache Playit agent
-        id: cache-playit
-        uses: actions/cache@v4
-        with:
-          path: /home/runner/playit
-          key: playit-agent-${{ runner.os }}-1.0
-
-      - name: Tải Playit agent nếu chưa cache
-        if: steps.cache-playit.outputs.cache-hit != 'true'
+      # Bỏ cache Playit agent để tránh lỗi, tải trực tiếp mỗi lần (file nhỏ ~5MB)
+      - name: Tải Playit agent
         run: |
-          curl -sSL https://playit.gg/downloads/playit-linux-amd64 -o /home/runner/playit
+          echo "⬇️ Đang tải Playit agent..."
+          curl -sSL -L -A "Mozilla/5.0" \
+            -o /home/runner/playit \
+            "https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64"
           chmod +x /home/runner/playit
+          if ! file /home/runner/playit | grep -q "ELF"; then
+            echo "❌ File tải về không phải binary! Nội dung:"
+            head -c 200 /home/runner/playit
+            exit 1
+          fi
+          echo "✅ Đã tải Playit agent"
 
       - name: Khởi động server + Playit + Ngrok
         run: |
@@ -390,18 +392,18 @@ jobs:
           sleep 1
           tmux send-keys -t controller "cd /home/runner && ./run.sh" C-m
 
-          echo "⏳ Đợi server Minecraft sẵn sàng..."
-          for i in {1..12}; do
+          echo "⏳ Đợi server Minecraft sẵn sàng (tối đa 120 giây)..."
+          for i in {1..24}; do
             if ss -tlnp | grep -q ":25565"; then
               echo "✅ Minecraft server đang lắng nghe port 25565!"
               break
             fi
-            echo "⏳ Chưa sẵn sàng (lần $i/12), đợi 5 giây..."
+            echo "⏳ Chưa sẵn sàng (lần $i/24), đợi 5 giây..."
             sleep 5
           done
 
           if ! ss -tlnp | grep -q ":25565"; then
-            echo "❌ Server vẫn chưa mở port sau 60 giây, nhưng vẫn tiếp tục..."
+            echo "⚠️ Server chưa mở port sau 120 giây, nhưng vẫn tiếp tục (Playit sẽ tự thử lại)."
           fi
 
           # ===== 2. KHỞI ĐỘNG PLAYIT (IP cố định) =====
