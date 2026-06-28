@@ -40,7 +40,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ===== CÀI CÔNG CỤ =====
       - name: Cài đặt công cụ
         run: |
           sudo apt update
@@ -48,7 +47,6 @@ jobs:
           sudo add-apt-repository universe -y 2>/dev/null || true
           sudo apt update
 
-      # ===== CÀI JAVA =====
       - name: Cài đặt Java ${{ github.event.inputs.java_version }}
         run: |
           JAVA_VER=${{ github.event.inputs.java_version }}
@@ -60,53 +58,42 @@ jobs:
             *) echo "❌ Java không hợp lệ"; exit 1 ;;
           esac
 
-          # Tìm JAVA_HOME chính xác
           JAVA_HOME=$(ls -d /usr/lib/jvm/java-${JAVA_VER}-openjdk-* 2>/dev/null | head -1)
           if [ -z "$JAVA_HOME" ]; then
             JAVA_HOME=$(ls -d /usr/lib/jvm/java-${JAVA_VER}-* 2>/dev/null | head -1)
           fi
 
-          # XÓA TẤT CẢ java/javac cũ trước khi cài mới (đảm bảo chỉ có 1 version)
           sudo rm -f /usr/bin/java /usr/bin/javac 2>/dev/null || true
-
-          # Tạo symlink trực tiếp vào /usr/bin (ưu tiên cao nhất)
           sudo ln -sf "$JAVA_HOME/bin/java" /usr/bin/java
           sudo ln -sf "$JAVA_HOME/bin/javac" /usr/bin/javac
 
-          # Cập nhật alternatives (backup)
           sudo update-alternatives --install /usr/bin/java java "$JAVA_HOME/bin/java" 9999
           sudo update-alternatives --set java "$JAVA_HOME/bin/java"
           sudo update-alternatives --install /usr/bin/javac javac "$JAVA_HOME/bin/javac" 9999
           sudo update-alternatives --set javac "$JAVA_HOME/bin/javac"
 
-          # Tạo file profile cho tất cả user (bao gồm runner SSH)
           sudo tee /etc/profile.d/99-java.sh > /dev/null << 'PROFILE'
           export JAVA_HOME=$(readlink -f /usr/bin/java | sed 's|/bin/java||')
           export PATH=/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
           PROFILE
           sudo chmod +x /etc/profile.d/99-java.sh
 
-          # Ghi đè .bashrc của runner để Java 8 luôn ưu tiên
           sudo tee /home/runner/.bashrc_java > /dev/null << 'BASHRC'
-          # Java priority - always use the installed version
           export JAVA_HOME=$(readlink -f /usr/bin/java | sed 's|/bin/java||')
           export PATH=/usr/lib/jvm/java-8-openjdk-amd64/bin:$PATH
           BASHRC
           sudo bash -c 'cat /home/runner/.bashrc_java >> /home/runner/.bashrc'
           sudo rm -f /home/runner/.bashrc_java
 
-          # Export cho step hiện tại
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
           export JAVA_HOME
           export PATH="$JAVA_HOME/bin:$PATH"
 
-          # Kiểm tra
           echo "=== Kiểm tra Java ==="
           which java
           java -version
           echo "JAVA_HOME=$JAVA_HOME"
 
-      # ===== NGROK =====
       - name: Cài đặt Ngrok
         run: |
           curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
@@ -115,7 +102,6 @@ jobs:
           sudo apt install -y ngrok
           ngrok config add-authtoken ${{ vars.NGROK_AUTH_TOKEN }}
 
-      # ===== SSH =====
       - name: Cấu hình SSH
         run: |
           echo "runner:${{ github.event.inputs.ssh_password }}" | sudo chpasswd
@@ -126,7 +112,6 @@ jobs:
           sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
 
-      # ===== LẤY DỮ LIỆU TỪ HOSTING PIKAMC =====
       - name: Tải dữ liệu Server từ PikaMC
         run: |
           mkdir -p ./server_minecraft
@@ -135,15 +120,38 @@ jobs:
           USE_BACKUP="${{ github.event.inputs.use_backup }}"
           if [ "$USE_BACKUP" = "yes" ]; then
             echo "📦 Đang tải file backup từ PikaMC API..."
+            echo "🔗 URL: ${{ vars.PIKAMC_URL }}/download"
+
             HTTP_STATUS=$(curl -s -w "%{http_code}" -o backup.zip \
+              --max-time 120 \
               -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
               "${{ vars.PIKAMC_URL }}/download")
 
+            echo "📊 HTTP Status: $HTTP_STATUS"
+            echo "📦 Kích thước file tải về: $(du -h backup.zip 2>/dev/null | cut -f1 || echo '0')"
+
             if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ Tải backup thành công. Đang giải nén..."
-              unzip -o backup.zip
-              rm -f backup.zip
-              echo "BACKUP_RESTORED=true" >> $GITHUB_ENV
+              if [ ! -s "backup.zip" ]; then
+                echo "❌ File backup.zip rỗng!"
+                rm -f backup.zip
+              else
+                echo "✅ Tải backup thành công. Đang giải nén..."
+                unzip -o backup.zip
+                rm -f backup.zip
+
+                # FIX: Nếu backup giải nén ra thư mục con server_minecraft/, di chuyển file lên
+                if [ -d "./server_minecraft" ]; then
+                  echo "🔄 Phát hiện thư mục lồng server_minecraft/, đang di chuyển file lên..."
+                  mv ./server_minecraft/* . 2>/dev/null || true
+                  mv ./server_minecraft/.* . 2>/dev/null || true
+                  rmdir ./server_minecraft 2>/dev/null || true
+                fi
+
+                echo "✅ Backup đã giải nén. Cấu trúc thư mục:"
+                ls -la
+
+                echo "BACKUP_RESTORED=true" >> $GITHUB_ENV
+              fi
             else
               echo "⚠️ Không có backup trước đó (Mã: $HTTP_STATUS). Sẽ tải server mới..."
               rm -f backup.zip
@@ -152,7 +160,6 @@ jobs:
             echo "🆕 Chế độ tạo mới — bỏ qua backup, tải server jar mới..."
           fi
 
-      # ===== TẢI SERVER JAR NẾU CHƯA CÓ =====
       - name: Tải server jar
         if: env.BACKUP_RESTORED != 'true'
         run: |
@@ -161,6 +168,7 @@ jobs:
           MC_VER="${{ github.event.inputs.mc_version }}"
 
           echo "🎮 Loại server: $SERVER_TYPE | Phiên bản: $MC_VER"
+          echo "📂 Đang ở: $(pwd)"
 
           case "$SERVER_TYPE" in
             mohist)
@@ -220,7 +228,6 @@ jobs:
             echo "server-port=25565" > server.properties
           fi
 
-      # ===== CHẠY NGrok + SERVER + TIMER 4.5h =====
       - name: Khởi động Ngrok, Server và Timer 4.5h
         run: |
           ACTION_MODE="${{ github.event.inputs.action_mode }}"
@@ -248,7 +255,6 @@ jobs:
           echo "✅ SSH Tunnel ready!"
           echo "$NGROK_URL" > /home/runner/ngrok_url.txt
 
-          # In thông tin kết nối ngay
           echo "=============================================="
           echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
           echo "🎮 Server: $SERVER_TYPE $MC_VER"
@@ -258,7 +264,6 @@ jobs:
           echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
           echo "=============================================="
 
-          # VIẾT run.sh VỚI GIÁ TRỊ HARDCODE
           cat > /home/runner/run.sh << EOF
           #!/bin/bash
           exec > /home/runner/run.log 2>&1
@@ -314,7 +319,6 @@ jobs:
 
           echo "🚀 RUN_CMD: \$RUN_CMD"
 
-          # Tạo tmux session mc
           tmux kill-session -t mc 2>/dev/null || true
           sleep 1
           tmux new-session -d -s mc
@@ -325,7 +329,6 @@ jobs:
           fi
           echo "✅ tmux session 'mc' đã tạo"
 
-          # Gửi lệnh chạy server vào tmux mc
           tmux send-keys -t mc "cd '\$SERVER_DIR' && \$RUN_CMD" C-m
           echo "✅ Đã gửi lệnh khởi động server vào tmux"
 
@@ -350,21 +353,43 @@ jobs:
           echo "⏳ Đợi 1 phút để server tắt..."
           sleep 60
 
+          # FIX: Xóa file backup.zip cũ trước khi nén (tránh treo khi upload)
+          echo "🗑️ Xóa file backup.zip cũ nếu có..."
+          rm -f "\$WORK_DIR/backup.zip"
+          rm -f "\$WORK_DIR/backup.zip.tmp"
+
           echo "📦 Đang nén backup..."
           cd "\$WORK_DIR"
           zip -r -q backup.zip ./server_minecraft
+          BACKUP_SIZE=\$(du -h backup.zip | cut -f1)
+          echo "✅ Đã nén backup: \$BACKUP_SIZE"
 
           echo "📤 Đang upload lên PikaMC..."
-          HTTP_STATUS=\$(curl -s -w "%{http_code}" -o /dev/null -X POST \
+          echo "🔗 URL: \$PIKAMC_URL/upload"
+          echo "⏱️ Bắt đầu upload lúc: \$(date)"
+
+          # Upload với timeout và verbose
+          HTTP_STATUS=\$(curl -s -w "\\nHTTP_CODE:%{http_code}\\nTIME_TOTAL:%{time_total}s\\nSIZE_UPLOAD:%{size_upload}" \
+            -o /tmp/upload_response.txt \
+            --max-time 600 \
+            -X POST \
             -H "x-api-key: \$PIKAMC_API_KEY" \
             -F "backup=@backup.zip" \
-            "\$PIKAMC_URL/upload")
+            "\$PIKAMC_URL/upload" | grep -E "HTTP_CODE|TIME_TOTAL|SIZE_UPLOAD")
 
-          if [ "\$HTTP_STATUS" = "200" ]; then
+          echo "📊 Kết quả upload:"
+          echo "\$HTTP_STATUS"
+          echo "📋 Response body:"
+          cat /tmp/upload_response.txt || echo "(không có response body)"
+
+          HTTP_CODE=\$(echo "\$HTTP_STATUS" | grep HTTP_CODE | cut -d: -f2)
+
+          if [ "\$HTTP_CODE" = "200" ]; then
             echo "✅ Backup thành công!"
             rm -f backup.zip
           else
-            echo "❌ Backup thất bại (Mã: \$HTTP_STATUS)"
+            echo "❌ Backup thất bại (Mã: \$HTTP_CODE)"
+            echo "💡 Gợi ý: Kiểm tra log PikaMC server để biết chi tiết lỗi"
           fi
 
           touch /home/runner/backup_done
@@ -373,7 +398,6 @@ jobs:
 
           chmod +x /home/runner/run.sh
 
-          # Chạy run.sh trong tmux controller
           tmux kill-session -t controller 2>/dev/null || true
           tmux new-session -d -s controller
           sleep 1
@@ -384,7 +408,6 @@ jobs:
           echo "📌 Xem server:  tmux attach -t mc"
           echo "📌 Xem script:  tmux attach -t controller"
 
-          # Đợi 15 giây rồi kiểm tra tmux mc có tồn tại không
           sleep 15
           if tmux has-session -t mc 2>/dev/null; then
             echo "✅ tmux session 'mc' đang chạy — server đã khởi động!"
@@ -394,13 +417,11 @@ jobs:
             cat /home/runner/run.log || true
           fi
 
-          # Giữ runner sống cho đến khi backup xong
           while ! [ -f /home/runner/backup_done ]; do
             sleep 10
           done
           echo "✅ Backup hoàn tất, workflow sẽ kết thúc."
 
-      # ===== CLEANUP & BACKUP KHI KẾT THÚC (kể cả bị cancel) =====
       - name: Cleanup & Backup
         if: always()
         run: |
@@ -423,25 +444,37 @@ jobs:
           cd "${GITHUB_WORKSPACE}"
           if [ -d "./server_minecraft" ]; then
             echo "📦 Đang nén backup..."
+            rm -f backup.zip backup.zip.tmp
             zip -r -q backup.zip ./server_minecraft
 
             echo "📤 Đang upload backup lên PikaMC..."
-            HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST \
+            echo "🔗 URL: ${{ vars.PIKAMC_URL }}/upload"
+
+            HTTP_STATUS=$(curl -s -w "\nHTTP_CODE:%{http_code}\nTIME_TOTAL:%{time_total}s\nSIZE_UPLOAD:%{size_upload}" \
+              -o /tmp/upload_response.txt \
+              --max-time 600 \
+              -X POST \
               -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
               -F "backup=@backup.zip" \
-              "${{ vars.PIKAMC_URL }}/upload")
+              "${{ vars.PIKAMC_URL }}/upload" | grep -E "HTTP_CODE|TIME_TOTAL|SIZE_UPLOAD")
 
-            if [ "$HTTP_STATUS" = "200" ]; then
+            echo "📊 Kết quả upload:"
+            echo "$HTTP_STATUS"
+            echo "📋 Response body:"
+            cat /tmp/upload_response.txt || echo "(không có response body)"
+
+            HTTP_CODE=$(echo "$HTTP_STATUS" | grep HTTP_CODE | cut -d: -f2)
+
+            if [ "$HTTP_CODE" = "200" ]; then
               echo "✅ Backup lên PikaMC thành công!"
               rm -f backup.zip
             else
-              echo "❌ Backup thất bại (Mã: $HTTP_STATUS)"
+              echo "❌ Backup thất bại (Mã: $HTTP_CODE)"
             fi
           fi
 
           echo "🧹 Cleanup hoàn tất."
 
-      # ===== TỰ ĐỘNG CHẠY LẠI WORKFLOW (chỉ khi thành công) =====
       - name: Tự động chạy lại workflow
         if: success()
         env:
