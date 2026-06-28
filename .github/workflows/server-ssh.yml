@@ -12,9 +12,9 @@ on:
         required: true
         default: '15G'
       java_version:
-        description: '☕ Java (8, 11, 17, 21)'
+        description: '☕ Java (11, 17, 21) — Java 8 không hỗ trợ trên Ubuntu 24.04'
         required: true
-        default: '8'
+        default: '17'
       mc_version:
         description: '🎮 Phiên bản Minecraft (vd: 1.12.2, 1.16.5, 1.20.1)'
         required: true
@@ -51,12 +51,21 @@ jobs:
         run: |
           JAVA_VER=${{ github.event.inputs.java_version }}
           case $JAVA_VER in
-            8)  sudo apt install -y openjdk-8-jdk ;;
             11) sudo apt install -y openjdk-11-jdk ;;
             17) sudo apt install -y openjdk-17-jdk ;;
             21) sudo apt install -y openjdk-21-jdk ;;
-            *) echo "❌ Java không hợp lệ"; exit 1 ;;
+            *) echo "❌ Chỉ hỗ trợ Java 11, 17, 21 trên Ubuntu 24.04"; exit 1 ;;
           esac
+
+          # Tìm đường dẫn java chính xác
+          JAVA_HOME=$(ls -d /usr/lib/jvm/java-${JAVA_VER}-openjdk-* 2>/dev/null | head -1)
+          if [ -z "$JAVA_HOME" ]; then
+            JAVA_HOME=$(ls -d /usr/lib/jvm/java-${JAVA_VER}-* 2>/dev/null | head -1)
+          fi
+          sudo update-alternatives --install /usr/bin/java java "$JAVA_HOME/bin/java" 1
+          sudo update-alternatives --set java "$JAVA_HOME/bin/java"
+          export JAVA_HOME
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
           java -version
 
       # ===== NGROK =====
@@ -122,7 +131,7 @@ jobs:
               INDEX_URL="https://mohistmc.com/builds-raw/${MOHIST_DIR}/"
               MOHIST_FILE=$(curl -s "$INDEX_URL" | grep -oP "${MOHIST_DIR}-[0-9]+\\.jar" | sort -V | tail -1)
               if [ -z "$MOHIST_FILE" ]; then
-                echo "❌ Không tìm thấy Mohist $MC_VER trong builds-raw"
+                echo "❌ Không tìm thấy Mohist $MC_VER"
                 exit 1
               fi
               echo "✅ Tìm thấy: $MOHIST_FILE"
@@ -160,7 +169,11 @@ jobs:
               ;;
           esac
 
-          echo "✅ Đã tải server.jar ($SERVER_TYPE $MC_VER)"
+          if [ ! -s "server.jar" ]; then
+            echo "❌ File server.jar tải về rỗng hoặc lỗi!"
+            exit 1
+          fi
+          echo "✅ Đã tải server.jar ($SERVER_TYPE $MC_VER) — $(du -h server.jar | cut -f1)"
 
           if [ ! -f "eula.txt" ]; then
             echo "eula=true" > eula.txt
@@ -173,14 +186,16 @@ jobs:
       - name: Khởi động Ngrok, Server và Timer 4.5h
         run: |
           ACTION_MODE="${{ github.event.inputs.action_mode }}"
-          SERVER_TYPE="${{ github.event.inputs.server_type }}"
-          MC_VER="${{ github.event.inputs.mc_version }}"
-          RAM="${{ github.event.inputs.ram }}"
-
           if [ "$ACTION_MODE" = "backup-only" ]; then
             echo "⚡ Chế độ BACKUP-ONLY — bỏ qua chạy server."
             exit 0
           fi
+
+          SERVER_TYPE="${{ github.event.inputs.server_type }}"
+          MC_VER="${{ github.event.inputs.mc_version }}"
+          RAM="${{ github.event.inputs.ram }}"
+          WORKSPACE="${GITHUB_WORKSPACE}"
+          JAVA_BIN="${JAVA_HOME}/bin/java"
 
           # Khởi động Ngrok
           echo "🌐 Đang mở SSH tunnel..."
@@ -205,93 +220,141 @@ jobs:
           echo "🚨 Backup sớm: SSH vào rồi chạy 'touch /home/runner/force_backup'"
           echo "=============================================="
 
-          export SERVER_DIR="${GITHUB_WORKSPACE}/server_minecraft"
-          export WORK_DIR="${GITHUB_WORKSPACE}"
-          export RAM="$RAM"
-          export PIKAMC_API_KEY="${{ vars.PIKAMC_API_KEY }}"
-          export PIKAMC_URL="${{ vars.PIKAMC_URL }}"
-          export SERVER_TYPE="$SERVER_TYPE"
-
-          cat > /home/runner/run.sh << 'EOF'
+          # VIẾT run.sh VỚI GIÁ TRỊ HARDCODE (không dùng export + heredoc 'EOF')
+          cat > /home/runner/run.sh << EOF
           #!/bin/bash
-          cd "$SERVER_DIR"
+          exec > /home/runner/run.log 2>&1
+          set -x
 
-          # Xử lý Forge/Mohist installer
-          if [ "$SERVER_TYPE" = "forge" ] || [ "$SERVER_TYPE" = "mohist" ]; then
-            echo "🔧 Đang cài đặt server ($SERVER_TYPE)..."
-            java -jar server.jar --installServer 2>/dev/null || true
+          SERVER_DIR="${WORKSPACE}/server_minecraft"
+          WORK_DIR="${WORKSPACE}"
+          RAM="${RAM}"
+          PIKAMC_API_KEY="${{ vars.PIKAMC_API_KEY }}"
+          PIKAMC_URL="${{ vars.PIKAMC_URL }}"
+          SERVER_TYPE="${SERVER_TYPE}"
+          JAVA_BIN="${JAVA_BIN}"
 
-            if [ -f "run.sh" ]; then
-              echo "✅ Tìm thấy run.sh — dùng script này để chạy"
-              RUN_CMD="./run.sh"
-            elif ls forge-*.jar 1>/dev/null 2>&1; then
-              FORGE_JAR=$(ls forge-*.jar | head -1)
-              echo "✅ Tìm thấy $FORGE_JAR"
-              RUN_CMD="java -Xmx$RAM -jar $FORGE_JAR nogui"
-            elif ls mohist-*.jar 1>/dev/null 2>&1; then
-              MOHIST_JAR=$(ls mohist-*.jar | head -1)
-              echo "✅ Tìm thấy $MOHIST_JAR"
-              RUN_CMD="java -Xmx$RAM -jar $MOHIST_JAR nogui"
-            else
-              echo "⚠️ Dùng server.jar gốc"
-              RUN_CMD="java -Xmx$RAM -jar server.jar nogui"
-            fi
-          else
-            RUN_CMD="java -Xmx$RAM -jar server.jar nogui"
+          echo "========== [run.sh] BẮT ĐẦU =========="
+          echo "📁 SERVER_DIR=\$SERVER_DIR"
+          echo "☕ JAVA_BIN=\$JAVA_BIN"
+          \$JAVA_BIN -version
+
+          if [ ! -d "\$SERVER_DIR" ]; then
+            echo "❌ Thư mục \$SERVER_DIR không tồn tại!"
+            exit 1
           fi
 
-          tmux kill-session -t mc 2>/dev/null
+          cd "\$SERVER_DIR"
+          echo "📂 Đang ở: \$(pwd)"
+          ls -la
+
+          # Xử lý Forge/Mohist installer
+          if [ "\$SERVER_TYPE" = "forge" ] || [ "\$SERVER_TYPE" = "mohist" ]; then
+            echo "🔧 Đang cài đặt server (\$SERVER_TYPE)..."
+            \$JAVA_BIN -jar server.jar --installServer || true
+            sleep 2
+
+            if [ -f "run.sh" ]; then
+              echo "✅ Tìm thấy run.sh"
+              chmod +x run.sh
+              RUN_CMD="./run.sh"
+            elif ls forge-*.jar 1>/dev/null 2>&1; then
+              FORGE_JAR=\$(ls forge-*.jar | head -1)
+              echo "✅ Tìm thấy \$FORGE_JAR"
+              RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar \$FORGE_JAR nogui"
+            elif ls mohist-*.jar 1>/dev/null 2>&1; then
+              MOHIST_JAR=\$(ls mohist-*.jar | head -1)
+              echo "✅ Tìm thấy \$MOHIST_JAR"
+              RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar \$MOHIST_JAR nogui"
+            else
+              echo "⚠️ Dùng server.jar gốc"
+              RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar server.jar nogui"
+            fi
+          else
+            RUN_CMD="\$JAVA_BIN -Xmx\$RAM -jar server.jar nogui"
+          fi
+
+          echo "🚀 RUN_CMD: \$RUN_CMD"
+
+          # Tạo tmux session mc
+          tmux kill-session -t mc 2>/dev/null || true
+          sleep 1
           tmux new-session -d -s mc
-          tmux send-keys -t mc "$RUN_CMD" C-m
-          echo "✅ Server đã khởi động trong tmux session 'mc'"
+          sleep 1
+          if ! tmux has-session -t mc 2>/dev/null; then
+            echo "❌ Không thể tạo tmux session mc!"
+            exit 1
+          fi
+          echo "✅ tmux session 'mc' đã tạo"
+
+          # Gửi lệnh chạy server vào tmux mc
+          tmux send-keys -t mc "cd '\$SERVER_DIR' && \$RUN_CMD" C-m
+          echo "✅ Đã gửi lệnh khởi động server vào tmux"
 
           # Vòng lặp: 4.5h HOẶC force_backup
           SECONDS_WAITED=0
-          while [ $SECONDS_WAITED -lt 16200 ]; do
+          while [ \$SECONDS_WAITED -lt 16200 ]; do
             if [ -f /home/runner/force_backup ]; then
               echo "🚨 Nhận lệnh backup sớm từ user!"
               rm -f /home/runner/force_backup
               break
             fi
             sleep 10
-            SECONDS_WAITED=$((SECONDS_WAITED + 10))
+            SECONDS_WAITED=\$((SECONDS_WAITED + 10))
           done
 
-          if [ $SECONDS_WAITED -ge 16200 ]; then
+          if [ \$SECONDS_WAITED -ge 16200 ]; then
             echo "⏰ Đã 4.5h, đang dừng server..."
           fi
 
+          echo "🛑 Gửi lệnh stop..."
           tmux send-keys -t mc "stop" C-m
-          echo "⏳ Đợi 1 phút để server tắt hoàn toàn..."
+          echo "⏳ Đợi 1 phút để server tắt..."
           sleep 60
 
-          echo "📦 Đang nén dữ liệu để backup..."
-          cd "$WORK_DIR"
+          echo "📦 Đang nén backup..."
+          cd "\$WORK_DIR"
           zip -r -q backup.zip ./server_minecraft
 
-          echo "📤 Đang upload backup lên PikaMC..."
-          HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST \
-            -H "x-api-key: $PIKAMC_API_KEY" \
+          echo "📤 Đang upload lên PikaMC..."
+          HTTP_STATUS=\$(curl -s -w "%{http_code}" -o /dev/null -X POST \
+            -H "x-api-key: \$PIKAMC_API_KEY" \
             -F "backup=@backup.zip" \
-            "$PIKAMC_URL/upload")
+            "\$PIKAMC_URL/upload")
 
-          if [ "$HTTP_STATUS" = "200" ]; then
-            echo "✅ Backup lên PikaMC thành công!"
+          if [ "\$HTTP_STATUS" = "200" ]; then
+            echo "✅ Backup thành công!"
             rm -f backup.zip
           else
-            echo "❌ Backup thất bại (Mã: $HTTP_STATUS)"
+            echo "❌ Backup thất bại (Mã: \$HTTP_STATUS)"
           fi
 
           touch /home/runner/backup_done
+          echo "========== [run.sh] HOÀN TẤT =========="
           EOF
 
           chmod +x /home/runner/run.sh
 
+          # Chạy run.sh trong tmux controller (để giữ sống và log)
+          tmux kill-session -t controller 2>/dev/null || true
           tmux new-session -d -s controller
+          sleep 1
           tmux send-keys -t controller "cd /home/runner && ./run.sh" C-m
 
-          echo "⏳ Server đang chạy. Sẽ tự backup sau 4.5 giờ (hoặc sớm hơn nếu bạn chạy force_backup)."
-          echo "📌 Bạn có thể SSH vào để xem log: tmux attach -t mc"
+          echo "⏳ Server đang khởi động..."
+          echo "📌 Log debug:   cat /home/runner/run.log"
+          echo "📌 Xem server:  tmux attach -t mc"
+          echo "📌 Xem script:  tmux attach -t controller"
+
+          # Đợi 15 giây rồi kiểm tra tmux mc có tồn tại không
+          sleep 15
+          if tmux has-session -t mc 2>/dev/null; then
+            echo "✅ tmux session 'mc' đang chạy — server đã khởi động!"
+          else
+            echo "❌ tmux session 'mc' KHÔNG tồn tại — server có thể bị lỗi!"
+            echo "📋 Log lỗi:"
+            cat /home/runner/run.log || true
+          fi
 
           # Giữ runner sống cho đến khi backup xong
           while ! [ -f /home/runner/backup_done ]; do
@@ -303,19 +366,22 @@ jobs:
       - name: Cleanup & Backup
         if: always()
         run: |
+          if [ -f /home/runner/backup_done ]; then
+            echo "✅ Backup đã hoàn tất trong run.sh, bỏ qua cleanup."
+            exit 0
+          fi
+
           echo "🧹 Bắt đầu cleanup..."
 
-          # Nếu server đang chạy trong tmux, stop nó
           if tmux has-session -t mc 2>/dev/null; then
             echo "🛑 Đang stop server..."
             tmux send-keys -t mc "stop" C-m
-            echo "⏳ Đợi 5 phút để server tắt hoàn toàn và lưu dữ liệu..."
-            sleep 300
+            echo "⏳ Đợi 2 phút để server tắt và lưu dữ liệu..."
+            sleep 120
           else
-            echo "ℹ️ Không có server nào đang chạy (có thể đã stop hoặc chưa khởi động)"
+            echo "ℹ️ Không có server nào đang chạy."
           fi
 
-          # Backup dữ liệu hiện tại
           cd "${GITHUB_WORKSPACE}"
           if [ -d "./server_minecraft" ]; then
             echo "📦 Đang nén backup..."
@@ -333,19 +399,17 @@ jobs:
             else
               echo "❌ Backup thất bại (Mã: $HTTP_STATUS)"
             fi
-          else
-            echo "⚠️ Không tìm thấy thư mục server_minecraft để backup"
           fi
 
           echo "🧹 Cleanup hoàn tất."
 
-      # ===== TỰ ĐỘNG CHẠY LẠI WORKFLOW (chỉ khi thành công, không khi lỗi/cancel) =====
+      # ===== TỰ ĐỘNG CHẠY LẠI WORKFLOW (chỉ khi thành công) =====
       - name: Tự động chạy lại workflow
         if: success()
         env:
           GH_TOKEN: ${{ vars.GH_PAT }}
         run: |
-          echo "🔄 Đang trigger workflow mới để chạy tiếp..."
+          echo "🔄 Đang trigger workflow mới..."
           gh workflow run "server-ssh.yml" \
             -f ssh_password="${{ github.event.inputs.ssh_password }}" \
             -f ram="${{ github.event.inputs.ram }}" \
