@@ -409,14 +409,20 @@ jobs:
             echo "⚠️ Server chưa mở port sau 120 giây, nhưng vẫn tiếp tục (Playit sẽ tự thử lại)."
           fi
 
-          # ===== 2. KHỞI ĐỘNG PLAYIT (IP cố định) =====
-          echo "🌐 Đang chạy Playit agent..."
-          /home/runner/playit --secret "${{ vars.PLAYIT_AGENT_KEY }}" > playit.log 2>&1 &
+          # ===== 2. KHỞI ĐỘNG PLAYIT trong tmux (IP cố định) =====
+          echo "🌐 Đang chạy Playit agent trong tmux session 'playit'..."
+          tmux kill-session -t playit 2>/dev/null || true
+          sleep 1
+          tmux new-session -d -s playit
+          sleep 1
+          # Set socket path để tránh lỗi IPC
+          tmux send-keys -t playit "export PLAYIT_SOCKET_PATH=/tmp/playit.sock" C-m
+          tmux send-keys -t playit "/home/runner/playit --secret ${{ vars.PLAYIT_AGENT_KEY }}" C-m
           sleep 3
-          if pgrep -x playit > /dev/null; then
-            echo "✅ Playit agent đã chạy!"
+          if tmux has-session -t playit 2>/dev/null; then
+            echo "✅ Playit agent đã chạy trong tmux playit!"
           else
-            echo "❌ Playit agent không khởi động được, kiểm tra playit.log"
+            echo "❌ Playit agent không khởi động được"
           fi
           echo "🎮 Minecraft IP cố định: ${{ vars.PLAYIT_HOSTNAME }}"
 
