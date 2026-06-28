@@ -39,7 +39,7 @@ jobs:
             11) sudo apt install -y openjdk-11-jdk ;;
             17) sudo apt install -y openjdk-17-jdk ;;
             21) sudo apt install -y openjdk-21-jdk ;;
-            *)  echo "❌ Java không hợp lệ"; exit 1 ;;
+            *) echo "❌ Java không hợp lệ"; exit 1 ;;
           esac
           java -version
 
@@ -68,13 +68,10 @@ jobs:
         run: |
           mkdir -p ./server_minecraft
           cd ./server_minecraft
-          
+
           echo "Đang tải file backup từ PikaMC API..."
-          # Đổi sang vars
-          HTTP_STATUS=$(curl -s -w "%{http_code}" -o backup.zip \
-            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
-            "${{ vars.PIKAMC_URL }}/download")
-          
+          HTTP_STATUS=$(curl -s -w "%{http_code}" -o backup.zip             -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}"             "${{ vars.PIKAMC_URL }}/download")
+
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "✅ Tải backup thành công. Đang giải nén..."
             unzip -o backup.zip
@@ -82,8 +79,7 @@ jobs:
           else
             echo "⚠️ Không có backup trước đó (Mã: $HTTP_STATUS). Bắt đầu tải server.jar mới..."
             rm -f backup.zip
-            wget -O server.jar "https://ci.mohistmc.com/job/Mohist-1.12.2/lastSuccessfulBuild/artifact/target/mohist-server-1.12.2-*.jar" || \
-            wget -O server.jar "https://cdn.getbukkit.org/spigot/spigot-1.12.2.jar"
+            wget -O server.jar "https://ci.mohistmc.com/job/Mohist-1.12.2/lastSuccessfulBuild/artifact/target/mohist-server-1.12.2-*.jar" ||             wget -O server.jar "https://cdn.getbukkit.org/spigot/spigot-1.12.2.jar"
             echo "eula=true" > eula.txt
             if [ ! -f "server.properties" ]; then
               echo "server-port=25565" > server.properties
@@ -105,12 +101,25 @@ jobs:
           echo "✅ SSH Tunnel ready!"
           echo "$NGROK_URL" > /home/runner/ngrok_url.txt
 
+          # ============================================
+          # IN THÔNG TIN KẾT NỐI NGAY TẠI ĐÂY
+          # ============================================
+          echo "=============================================="
+          echo "✅ MỌI THỨ ĐÃ SẴN SÀNG!"
+          echo "🔗 SSH: ssh -p ${NGROK_URL##*:} runner@${NGROK_URL%:*}"
+          echo "🔑 Mật khẩu: ${{ github.event.inputs.ssh_password }}"
+          echo "⏳ Tự động lưu và chạy lại sau 4.5 giờ nữa."
+          echo "=============================================="
+
+          # Export biến môi trường cho script con (heredoc 'EOF' không expand $)
+          export SERVER_DIR="${GITHUB_WORKSPACE}/server_minecraft"
+          export WORK_DIR="${GITHUB_WORKSPACE}"
+          export RAM="${{ github.event.inputs.ram }}"
+          export PIKAMC_API_KEY="${{ vars.PIKAMC_API_KEY }}"
+          export PIKAMC_URL="${{ vars.PIKAMC_URL }}"
+
           cat > /home/runner/run.sh << 'EOF'
           #!/bin/bash
-          SERVER_DIR="$(pwd)/server_minecraft"
-          RAM="${{ github.event.inputs.ram }}"
-          WORK_DIR="$(pwd)"
-
           cd "$SERVER_DIR"
           tmux kill-session -t mc 2>/dev/null
           tmux new-session -d -s mc
@@ -128,14 +137,10 @@ jobs:
           echo "📦 Đang nén dữ liệu để backup..."
           cd "$WORK_DIR"
           zip -r -q backup.zip ./server_minecraft
-          
+
           echo "📤 Đang upload backup lên PikaMC..."
-          # Đổi sang vars
-          HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST \
-            -H "x-api-key: ${{ vars.PIKAMC_API_KEY }}" \
-            -F "backup=@backup.zip" \
-            "${{ vars.PIKAMC_URL }}/upload")
-            
+          HTTP_STATUS=$(curl -s -w "%{http_code}" -o /dev/null -X POST             -H "x-api-key: $PIKAMC_API_KEY"             -F "backup=@backup.zip"             "$PIKAMC_URL/upload")
+
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "✅ Backup lên PikaMC thành công!"
             rm -f backup.zip
@@ -154,12 +159,13 @@ jobs:
           echo "⏳ Server đang chạy. Sẽ tự backup sau 4.5 giờ."
           echo "📌 Bạn có thể SSH vào để xem log: tmux attach -t mc"
 
+          # Giữ runner sống cho đến khi backup xong
           while ! [ -f /home/runner/backup_done ]; do
             sleep 10
           done
           echo "✅ Backup hoàn tất, workflow sẽ kết thúc."
 
-      # ===== HIỂN THỊ THÔNG TIN =====
+      # ===== HIỂN THỊ THÔNG TIN (dự phòng khi bước trên xong) =====
       - name: Hiển thị thông tin kết nối
         run: |
           if [ -f /home/runner/ngrok_url.txt ]; then
@@ -176,12 +182,8 @@ jobs:
       - name: Tự động chạy lại workflow
         if: always()
         env:
-          # Đổi sang vars
           GH_TOKEN: ${{ vars.GH_PAT }}
         run: |
           echo "🔄 Đang trigger workflow mới để chạy tiếp..."
-          gh workflow run "server-ssh.yml" \
-            -f ssh_password="${{ github.event.inputs.ssh_password }}" \
-            -f ram="${{ github.event.inputs.ram }}" \
-            -f java_version="${{ github.event.inputs.java_version }}"
+          gh workflow run "server-ssh.yml"             -f ssh_password="${{ github.event.inputs.ssh_password }}"             -f ram="${{ github.event.inputs.ram }}"             -f java_version="${{ github.event.inputs.java_version }}"
           echo "✅ Đã gửi yêu cầu chạy workflow mới."
